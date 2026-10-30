@@ -217,13 +217,23 @@ def all_records() -> list[dict]:
         return []
 
 def get_tracked_individual_files(user_id: str = None) -> list[dict]:
-    """Returns all tracked individual files (e.g. uploaded via GUI)."""
+    """Returns individually tracked files (sync_mode='individual') for the given user.
+
+    Fails closed: returns an empty list when user_id is absent or blank so that
+    a missing auth context never silently exposes another account's records. (Fix A)
+    """
+    if not user_id:
+        logger.warning(
+            "get_tracked_individual_files called without user_id — returning empty list "
+            "to prevent cross-account data exposure."
+        )
+        return []
     try:
         with _get_connection() as conn:
-            if user_id:
-                cursor = conn.execute("SELECT * FROM file WHERE sync_mode = 'individual' AND (user_id = ? OR user_id IS NULL)", (user_id,))
-            else:
-                cursor = conn.execute("SELECT * FROM file WHERE sync_mode = 'individual'")
+            cursor = conn.execute(
+                "SELECT * FROM file WHERE sync_mode = 'individual' AND (user_id = ? OR user_id IS NULL)",
+                (user_id,),
+            )
             return [dict(row) for row in cursor.fetchall()]
     except Exception as e:
         logger.error(f"Error fetching tracked individual files: {e}")

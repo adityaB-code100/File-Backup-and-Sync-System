@@ -224,6 +224,9 @@ class IndividualFileMonitor:
     """Manages watchdog observers for individually selected files across arbitrary directories."""
     def __init__(self, event_queue: queue.Queue, debounce_seconds: float = 1.0, on_start_editing=None):
         self.event_queue = event_queue
+        # Store constructor args so the handler and observer can be re-created after stop (Fix B)
+        self._debounce_seconds = debounce_seconds
+        self._on_start_editing = on_start_editing
         self.handler = IndividualFileHandler(event_queue, debounce_seconds=debounce_seconds, on_start_editing=on_start_editing)
         self.observer = Observer()
         self._dir_watches = {}  # normcase(parent_dir) -> (watch_handle, ref_count)
@@ -231,8 +234,21 @@ class IndividualFileMonitor:
         self._started = False
 
     def start(self):
+        """Start the observer. Re-creates handler and observer if they were previously stopped,
+        so repeated logout/login cycles do not raise RuntimeError. (Fix B)"""
         with self._lock:
             if not self._started:
+                # Re-create the handler if its flusher thread is no longer alive
+                if not self.handler._flusher_thread.is_alive():
+                    self.handler = IndividualFileHandler(
+                        self.event_queue,
+                        debounce_seconds=self._debounce_seconds,
+                        on_start_editing=self._on_start_editing,
+                    )
+                # Re-create the observer if it is no longer alive
+                if not self.observer.is_alive():
+                    self.observer = Observer()
+                    self._dir_watches.clear()
                 self.observer.start()
                 self._started = True
 
@@ -275,6 +291,8 @@ class IndividualFileMonitor:
                     self._dir_watches[norm_dir] = (watch, count - 1)
 
     def stop(self):
+        """Stop the observer and clear all handler/watcher state so start() can safely
+        re-create fresh instances for the next account session. (Fix B)"""
         with self._lock:
             self.handler.stop()
             if self._started:
@@ -284,4 +302,9 @@ class IndividualFileMonitor:
                 except Exception:
                     pass
                 self._started = False
+            # Clear tracking state so the next start() begins with a clean slate
+            with self.handler._lock:
+                self.handler._tracked_files.clear()
+                self.handler._pending.clear()
+            self._dir_watches.clear()
 

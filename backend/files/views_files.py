@@ -21,6 +21,29 @@ from files.crypto_utils import (
 import mongoengine as me
 from files.lock_service import FileLockService
 
+def _find_available_name(base_name: str, parent_folder, owner) -> str:
+    """Return base_name if unused in the given folder, otherwise return
+    'stem (N).ext' for the smallest N >= 1 that is not taken.
+    Scoped to the owner and parent_folder; respects soft-delete semantics.
+    Handles multi-dot extensions (e.g. 'archive.tar.gz') by splitting only
+    on the rightmost dot.
+    """
+    dot_idx = base_name.rfind('.')
+    if dot_idx > 0:
+        stem, ext = base_name[:dot_idx], base_name[dot_idx:]
+    else:
+        stem, ext = base_name, ''
+
+    candidate = base_name
+    n = 0
+    while True:
+        if not File.objects(owner=owner, parent_folder=parent_folder,
+                            name=candidate, deleted=False).first():
+            return candidate
+        n += 1
+        candidate = f"{stem} ({n}){ext}"
+
+
 class UploadRateThrottle(UserRateThrottle):
     scope = 'uploads'
 
@@ -110,8 +133,9 @@ class FileListCreateView(APIView):
             if not name:
                 return Response({"error": "File name is required.", "code": "VALIDATION_ERROR"}, status=status.HTTP_400_BAD_REQUEST)
 
+            resolved_name = _find_available_name(name, parent_folder, user)
             file_record = File(
-                name=name,
+                name=resolved_name,
                 owner=user,
                 parent_folder=parent_folder,
                 created_at=datetime.utcnow(),
@@ -122,7 +146,8 @@ class FileListCreateView(APIView):
             return Response(file_record.to_dict(), status=status.HTTP_201_CREATED)
 
         # Multipart single-shot upload
-        filename = name or file_obj_in_request.name
+        # Resolve name collision: if 'report.txt' exists, use 'report (1).txt', etc.
+        filename = _find_available_name(name or file_obj_in_request.name, parent_folder, user)
         kek_bytes = get_master_kek()
 
         # Temporary save to check hash and size

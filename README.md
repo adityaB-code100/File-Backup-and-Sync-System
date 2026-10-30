@@ -1,22 +1,76 @@
-# File_Backup_Sync — Self-Hosted Cloud Storage Platform
+# VaultCloud — Secure File Backup & Sync Platform
 
-A lightweight, secure, self-hosted alternative to Google Drive featuring a **Django REST API** backend, **MongoDB** database (via `mongoengine`), **AES-256-GCM envelope encryption**, a **React (Vite) web dashboard**, and an API contract matching **Google Drive API v3** semantics for seamless desktop sync client integration.
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Django](https://img.shields.io/badge/Django-5.0%2B-green.svg)](https://www.djangoproject.com/)
+[![React](https://img.shields.io/badge/React-19.2-61dafb.svg)](https://react.dev/)
+[![Vite](https://img.shields.io/badge/Vite-8.2-purple.svg)](https://vitejs.dev/)
+[![MongoDB](https://img.shields.io/badge/MongoDB-Atlas%20%2F%20Local-13aa52.svg)](https://www.mongodb.com/)
+[![Security](https://img.shields.io/badge/Encryption-AES--256--GCM-red.svg)](https://en.wikipedia.org/wiki/Galois/Counter_Mode)
 
----
-
-## 🌟 Key Features
-
-- 🔐 **AES-256-GCM Envelope Encryption**: Every file version is encrypted on disk using a unique random Data Encryption Key (DEK). DEKs are wrapped with a master Key Encryption Key (KEK).
-- ⚡ **Content-Addressed Storage & Deduplication**: Plaintext SHA-256 content hashes are calculated pre-encryption. Identical files are stored physically only once on disk.
-- 🔄 **Google Drive API v3 Compatibility**: Endpoint structure mirrors Drive v3 (resource IDs, parent references, revisions, SHA-256 checksums, change polling).
-- 📊 **Version History & Restore**: Track file revisions, inspect SHA-256 hashes, download old versions, or restore past revisions as current.
-- 🗑️ **Soft Delete & Trash**: Move files to trash with restore or permanent deletion options.
-- 🔒 **Argon2 Password Hashing & JWT Auth**: Secure authentication with SimpleJWT, token refresh, and rate limiting.
-- 💻 **Modern React Dashboard**: Sleek glassmorphism UI with grid/list view toggles, folder breadcrumbs, drag-and-drop uploads, and real-time storage usage indicator.
+A self-hosted, end-to-end secure alternative to Google Drive featuring a **Django REST API** backend, **MongoDB** database (via `mongoengine`), **AES-256-GCM envelope encryption**, a **React 19 (Vite) web dashboard**, and a **multi-threaded Python desktop synchronization client** conforming to Google Drive API v3 semantics.
 
 ---
 
-## 🚀 Quick Start Guide
+## Key Features
+
+- **AES-256-GCM Envelope Encryption**: Every file revision is encrypted on disk with a fresh, random 256-bit Data Encryption Key (DEK). DEKs are wrapped using a master Key Encryption Key (KEK).
+- **Content-Addressed Storage & Deduplication**: Plaintext SHA-256 hashes are computed pre-encryption. Identical file blobs are stored physically only once on disk.
+- **Atomic Distributed File Locking**: Prevents multi-device write collisions with device-bound atomic locks and 300-second TTL auto-expiry.
+- **Autonomous Desktop Sync Agent**: Event-driven filesystem monitoring with millisecond debouncing, atomic save handling, and offline change reconciliation.
+- **Zero-Loss Conflict Resolution**: Generates timestamped conflicted copies whenever true concurrent updates collide (HTTP 409 Conflict).
+- **Collision-Safe Duplicate Naming**: Automatically renames colliding uploads within the same cloud folder (`file (1).ext`), correctly preserving multi-dot extensions (e.g. `archive.tar.gz`).
+- **Version History & Rollback**: Track revisions, inspect SHA-256 hashes, download past revisions, or restore historical snapshots.
+- **Soft-Delete Trash**: Move items to trash with full restoration or permanent deletion options.
+- **Argon2 Password Hashing & JWT Auth**: Secure authentication with SimpleJWT, token refresh queuing, and rate limiting.
+- **Modern Glassmorphism Web UI**: Sleek React dashboard with grid/list toggles, folder breadcrumbs, drag-and-drop ingestion, and live storage quota indicator.
+
+---
+
+## Repository Structure
+
+```
+backup-sync/
+├── app/                           # Desktop Sync Agent (Watcher, Engine, SQLite, GUI)
+│   ├── gui.py                     # Tkinter desktop graphical interface
+│   ├── main.py                    # CLI directory sync daemon
+│   ├── watcher.py                 # Watchdog observer & debounced event queues
+│   ├── sync_engine.py             # Sync state machine & conflict reconciliation
+│   ├── drive_client.py            # HTTP client with Tenacity exponential retry
+│   ├── db.py                      # Local SQLite persistence manager
+│   ├── auth.py                    # Client session & JWT token manager
+│   └── test_*.py                  # Automated test suites (isolation, naming)
+├── backend/                       # Django REST API & Storage Backend
+│   ├── accounts/                  # User authentication & Argon2 password hashing
+│   ├── files/                     # Files, folders, revisions, and locking API
+│   ├── storage/                   # Storage quota & secondary disaster recovery
+│   ├── cloud_storage/             # Django settings, URLs, and middleware
+│   ├── manage.py                  # Django CLI management script
+│   └── Procfile                   # Production deployment process definition
+├── frontend/                      # React 19 + Vite Web Application
+│   ├── src/
+│   │   ├── components/            # FileBrowser, Sidebar, Navbar, VersionModal, Trash
+│   │   ├── services/              # Axios client with JWT refresh queue
+│   │   └── context/               # Global AuthContext
+│   ├── package.json
+│   └── vite.config.js
+├── docs/                          # Architecture & Deployment Documentation
+│   ├── DEPLOYMENT.md              # Deployment guide & disk configuration
+│   └── PROJECT_DIAGNOSIS_REPORT.md# Reliability audit & verification findings
+├── PROJECT_TECHNICAL_ANALYSIS.md  # Comprehensive project report reference
+├── requirements.txt               # Unified Python dependencies
+└── .gitignore                     # Multi-tier secret and cache exclusions
+```
+
+---
+
+## Quick Start Guide
+
+### Prerequisites
+- Python 3.10 or higher
+- Node.js 18 or higher & npm
+- MongoDB 6.0+ running locally or MongoDB Atlas URI
+
+---
 
 ### 1. Backend Setup
 
@@ -26,93 +80,118 @@ cd backend
 # Copy environment template
 cp .env.example .env
 
-# Install Python dependencies
+# Edit .env with your MongoDB URI, SECRET_KEY, and FILE_ENCRYPTION_KEK
+# (See Environment Configuration section below)
+
+# Install dependencies
 pip install -r requirements.txt
 
-# Run tests
+# Run system checks and tests
+python manage.py check
 python manage.py test
 
-# Apply migrations and start server
-python manage.py migrate
+# Start the development server
 python manage.py runserver 8000
 ```
-Backend API will be running at `http://localhost:8000/api/`.
+Backend REST API will be accessible at `http://localhost:8000/api/`.
+
+---
 
 ### 2. Frontend Setup
 
 ```bash
 cd frontend
 
+# Copy environment template
+cp .env.example .env
+
 # Install Node dependencies
 npm install
 
-# Start Vite dev server
+# Start the development server
 npm run dev
 ```
-Frontend Web App will be running at `http://localhost:5173/`.
+Frontend web application will be accessible at `http://localhost:5173/`.
 
----
-
-## 📁 Repository Structure
-
-```
-File_Backup_Sync/
-├── app/                  # Desktop Sync Agent Client (Watcher, Sync Engine, DB)
-├── backend/              # Django REST API + MongoEngine Backend
-│   ├── accounts/         # User auth, Argon2 password hashing, SimpleJWT
-│   ├── files/            # File/Folder models, Envelope Crypto, Drive v3 Endpoints
-│   ├── storage/          # Storage usage tracking
-│   ├── cloud_storage/    # Django project settings and URLs
-│   ├── manage.py
-│   └── requirements.txt
-├── frontend/             # React (Vite) Web Dashboard
-│   ├── src/
-│   │   ├── components/   # FileBrowser, Sidebar, Navbar, VersionHistory, Trash
-│   │   ├── services/     # Axios client with JWT refresh interceptor
-│   │   └── context/      # AuthContext
-│   └── package.json
-├── API_DOCUMENTATION.md  # Detailed API contract & Sync Client Integration Guide
-└── .gitignore            # Git exclusion rules for secrets and binaries
+To build for production:
+```bash
+npm run build
 ```
 
 ---
 
-## 📖 API Documentation & Sync Agent Swap
+### 3. Desktop Sync Agent
 
-For complete details on API endpoints, request/response schemas, status codes, and desktop sync agent swap instructions, view [API_DOCUMENTATION.md](API_DOCUMENTATION.md).
+To launch the graphical desktop synchronization agent:
+```bash
+# From the project root
+python app/gui.py
+```
+
+To run as a headless background CLI directory daemon:
+```bash
+python -m app.main <path_to_local_sync_folder>
+```
 
 ---
 
-## 🚀 Production Deployment
+## Environment & Security Configuration
 
-This project is built for standard, easily-deployable platforms.
+> **IMPORTANT:** Never commit `.env`, `credentials.json`, or `token.json` files to Git. The project `.gitignore` excludes all environment and secret files by default.
 
-### Backend (Render / Heroku / DigitalOcean)
-The backend is a standard Django application with a `Procfile` utilizing `gunicorn`.
+Configure secrets in `backend/.env` for local development, or in your hosting provider's environment variables dashboard for production:
 
-1. Deploy the `backend/` directory to a PAAS like **Render** or **Heroku**.
-2. **Environment Variables**: You MUST set all variables in the deployment dashboard rather than uploading a `.env` file.
-   - Set `ALLOWED_HOSTS` to your production domain (e.g., `api.yourdomain.com`).
-   - Set `CORS_ALLOWED_ORIGINS` to your frontend domain (e.g., `https://drive.yourdomain.com`).
-   - Set `MONGO_URI` to your MongoDB Atlas production connection string.
-3. The platform will automatically run `pip install -r requirements.txt` and start the app via the `Procfile`.
+| Variable | Description | Example / Generation |
+|----------|-------------|----------------------|
+| `MONGO_URI` | MongoDB connection URI | `mongodb+srv://<user>:<pwd>@cluster.mongodb.net/cloud_storage_db` |
+| `SECRET_KEY` | Django cryptographic signing key | Strong random string |
+| `JWT_SIGNING_KEY` | Key for signing authentication JWTs | Strong random string |
+| `FILE_ENCRYPTION_KEK` | 32-byte Base64 Master Key Encryption Key | `python -c "import os,base64; print(base64.b64encode(os.urandom(32)).decode())"` |
+| `DEBUG` | Set to `False` in production | `True` (dev) / `False` (prod) |
+| `ALLOWED_HOSTS` | Comma-separated allowed hostnames | `localhost,127.0.0.1,api.yourdomain.com` |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated allowed client origins | `http://localhost:5173,https://yourdomain.com` |
+| `STORAGE_ROOT` | Primary encrypted blob directory | `./file_storage` |
+| `SECONDARY_BACKUP_ROOT` | Secondary backup destination | `D:\VaultCloudBackup` (or network share / NAS) |
+
+---
+
+## Running Automated Tests
+
+```bash
+# 1. Run Account Isolation & Watcher Lifecycle Tests (16 tests)
+python -m unittest app.test_account_isolation app.test_individual_sync -v
+
+# 2. Run Duplicate Filename Handling Tests (16 tests)
+python -m unittest app.test_duplicate_filename -v
+
+# 3. Run Backend API Tests
+cd backend && python manage.py test
+
+# 4. Verify Django System Health
+cd backend && python manage.py check
+```
+
+---
+
+## Production Deployment
+
+### Backend (Render / Heroku / DigitalOcean / Railway)
+The backend includes a `Procfile` utilizing `gunicorn`:
+1. Connect repository to PAAS provider with root or `backend/` directory.
+2. Set all required environment variables in the provider dashboard.
+3. Build command: `pip install -r requirements.txt`.
+4. Start command: `gunicorn cloud_storage.wsgi --log-file -`.
 
 ### Frontend (Vercel / Netlify)
-The frontend is a standard Vite React app.
-1. Connect your repository to **Vercel** or **Netlify** and set the root directory to `frontend/`.
-2. Ensure the build command is `npm run build` and output directory is `dist/`.
-3. Add the `VITE_API_BASE_URL` environment variable pointing to your deployed backend (e.g., `https://api.yourdomain.com/api`).
+1. Connect repository with root directory set to `frontend/`.
+2. Build command: `npm run build`.
+3. Output directory: `dist`.
+4. Environment variable: `VITE_API_BASE_URL=https://api.yourdomain.com/api`.
+
+Detailed deployment notes and disaster recovery documentation can be found in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
 ---
 
-## 🛡️ Environment & Security
+## License
 
-> **⚠️ CRITICAL:** Ensure `.env` files are NEVER committed to version control. They contain highly sensitive cryptographic keys that cannot be rotated without losing access to encrypted files. The repository includes a `.gitignore` that ignores all `*.env` files by default.
-
-Set environment secrets in `backend/.env` for local development, or in your hosting provider's dashboard for production:
-- `MONGO_URI`: Your MongoDB Atlas connection string.
-- `SECRET_KEY`: A highly secure random string for Django's cryptographic signing.
-- `JWT_SIGNING_KEY`: Used to sign authentication tokens.
-- `FILE_ENCRYPTION_KEK`: (32-byte Base64 key) The **Key Encryption Key** used to wrap all file Data Encryption Keys. If this key is lost or compromised, all files become unrecoverable. 
-- `ALLOWED_HOSTS`: Comma-separated list of allowed domains in production.
-- `CORS_ALLOWED_ORIGINS`: Comma-separated list of allowed frontend origins in production.
+This project was developed for educational and academic research purposes as part of the B.Tech Computer Science & Engineering degree program.

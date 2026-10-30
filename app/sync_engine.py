@@ -204,9 +204,12 @@ def _handle_local_change(auth, path: str, watched_dir: str, device_id: str, even
                                           cloud_version=remote_ver)
                         return
                     else:
-                        logger.info(f"[sync] File '{rel_path}' exists on VaultCloud with different hash. Updating existing cloud ID {remote_id} instead of creating duplicate.")
-                        cloud_id = remote_id
-                        cloud_version = remote_ver
+                        logger.info(
+                            f"[sync] Cloud has '{os.path.basename(path)}' with different content — "
+                            f"this is a distinct file. Uploading as new; server will assign an available name."
+                        )
+                        # Do NOT adopt the existing cloud ID; let POST create a new file record
+                        # with a server-assigned available name (e.g. 'report (1).txt').
             except Exception as e:
                 logger.warning(f"[sync] Could not check remote file existence for '{rel_path}': {e}")
         
@@ -446,20 +449,21 @@ def upload_new_individual_file(auth, file_path: str, device_id: str) -> dict:
             from drive_client import find_drive_file
             remote_file = find_drive_file(auth, filename, parent_id="root")
             if remote_file:
-                cloud_id = remote_file.get("id")
-                cloud_version = remote_file.get("version_number", 1)
                 remote_hash = remote_file.get("content_hash")
                 if remote_hash == current_hash:
-                    # Same hash, adopt existing cloud ID without uploading
+                    # Exact hash match: same content already on cloud.
+                    # Adopt the existing cloud ID — idempotent recovery, no re-upload needed.
+                    adopted_cloud_id = remote_file.get("id")
+                    adopted_version = remote_file.get("version_number", 1)
                     from datetime import timezone
                     now_iso = datetime.now(timezone.utc).isoformat()
                     db.upsert_record(
                         abs_path,
                         local_hash=current_hash,
-                        cloud_id=cloud_id,
+                        cloud_id=adopted_cloud_id,
                         last_synced_hash=current_hash,
                         last_synced_cloud_md5=remote_hash,
-                        cloud_version=cloud_version,
+                        cloud_version=adopted_version,
                         sync_mode="individual",
                         abs_path=abs_path,
                         status="Synced",
@@ -468,11 +472,18 @@ def upload_new_individual_file(auth, file_path: str, device_id: str) -> dict:
                         is_active=1
                     )
                     return {
-                        "id": cloud_id,
-                        "version_number": cloud_version,
+                        "id": adopted_cloud_id,
+                        "version_number": adopted_version,
                         "content_hash": remote_hash,
                         "status": "adopted"
                     }
+                else:
+                    logger.info(
+                        f"[sync] Cloud already has '{filename}' with different content "
+                        f"— this is a distinct file. Uploading as new; "
+                        f"server will assign an available name (e.g. '{filename.rsplit('.', 1)[0]} (1).{filename.rsplit('.', 1)[-1]}')."
+                    )
+                    # cloud_id stays None → POST will create a new File record.
         except Exception as e:
             logger.warning(f"[sync] Could not check remote existence for '{filename}': {e}")
 

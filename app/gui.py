@@ -254,7 +254,10 @@ class VaultCloudGUI(tk.Tk):
         self._restore_tracked_files()
 
     def _restore_tracked_files(self):
-        records = db.get_tracked_individual_files()
+        # Fix A: obtain current user ID and pass it to the query so only this
+        # account's records are loaded (fails closed when user_id is absent).
+        current_uid = self.current_user.get("id") if self.current_user else None
+        records = db.get_tracked_individual_files(user_id=current_uid)
         self._log(f"Restoring {len(records)} individually tracked file(s) from local database...")
         for rec in records:
             abs_p = rec.get("abs_path") or rec.get("path")
@@ -283,6 +286,16 @@ class VaultCloudGUI(tk.Tk):
             )
 
             if is_active and os.path.exists(abs_p):
+                # Fix C: reject foreign-account files before registering with the watcher.
+                rec_uid = rec.get("user_id")
+                if rec_uid and current_uid and rec_uid != current_uid:
+                    logger.warning(
+                        "Skipping watcher subscription for file owned by a different account "
+                        f"(file owner: ...{rec_uid[-6:]}, session: ...{str(current_uid)[-6:]}): "
+                        f"{os.path.basename(abs_p)}"
+                    )
+                    self._update_file_status_ui(abs_p, status="Stopped", error="Foreign account record")
+                    continue  # do not track_file or start offline-check thread
                 self.monitor.track_file(abs_p)
                 self._log(f"Monitoring resumed for: {os.path.basename(abs_p)} ({abs_p})")
                 # Asynchronously check if file changed while agent was offline
@@ -309,6 +322,19 @@ class VaultCloudGUI(tk.Tk):
         if not self.drive_auth:
             self._log(f"Skipping auto-sync for '{filename}' (not authenticated)", "WARNING")
             return
+
+        # Fix C: drop queued events from files belonging to a different account.
+        # This guards against stale events that were enqueued before logout.
+        _event_rec = db.get_record(abs_path)
+        if _event_rec:
+            _rec_uid = _event_rec.get("user_id")
+            _cur_uid = self.current_user.get("id") if self.current_user else None
+            if _rec_uid and _cur_uid and _rec_uid != _cur_uid:
+                logger.warning(
+                    "Dropping queued event for file owned by a different account "
+                    f"(file owner: ...{_rec_uid[-6:]}, session: ...{str(_cur_uid)[-6:]}): {filename}"
+                )
+                return
 
         # Update GUI status to Changes detected
         self.after(0, lambda: self._update_file_status_ui(abs_path, status="Changes detected"))
@@ -589,6 +615,13 @@ class VaultCloudGUI(tk.Tk):
                 self.current_user = None
                 self.drive_auth = None
                 self.monitor.stop()
+                # Drain any filesystem events queued before logout so a previous
+                # account's pending events cannot execute after account switch. (Fix B)
+                while not self.event_queue.empty():
+                    try:
+                        self.event_queue.get_nowait()
+                    except Exception:
+                        break
                 self.tree.delete(*self.tree.get_children())
                 self._tree_paths.clear()
                 self.account_label.config(text="Active Account: Logged Out", foreground="#888888")
