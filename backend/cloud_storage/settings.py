@@ -76,10 +76,16 @@ MONGO_URI = os.getenv('MONGO_URI', 'mongodb://localhost:27017/cloud_storage_db')
 try:
     mongoengine.connect(host=MONGO_URI)
 except Exception as _mongo_conn_err:
+    if not DEBUG:
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured(
+            f"Production MongoDB connection failed for MONGO_URI. "
+            f"Failing fast to prevent running without database: {_mongo_conn_err}"
+        )
     import logging
     logging.getLogger('cloud_storage').warning(
         f"Could not connect to configured MONGO_URI ({_mongo_conn_err}). "
-        "Attempting fallback to local MongoDB instance."
+        "Attempting fallback to local MongoDB instance for development."
     )
     try:
         mongoengine.connect(host='mongodb://localhost:27017/cloud_storage_db')
@@ -159,6 +165,7 @@ if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
 
     # Hard-fail on insecure defaults in production
     from django.core.exceptions import ImproperlyConfigured

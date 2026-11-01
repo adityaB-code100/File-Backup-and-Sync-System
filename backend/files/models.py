@@ -22,6 +22,7 @@ class Folder(me.Document):
             "parent_id": str(self.parent_folder.id) if self.parent_folder else None,
             "type": "folder",
             "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.created_at.isoformat() if self.created_at else None,
             "deleted": self.deleted
         }
 

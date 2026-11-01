@@ -31,9 +31,9 @@ const RightSidebar = ({ refreshKey }) => {
       const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
       const res = await api.get(`/files/changes/?since=${encodeURIComponent(since)}`);
       const changes = res.data.changes || [];
-      // Sort by updated_at descending, take top 5
+      // Sort by updated_at / created_at descending, take top 5
       const sorted = [...changes].sort(
-        (a, b) => new Date(b.updated_at) - new Date(a.updated_at)
+        (a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at)
       ).slice(0, 5);
       setActivities(sorted);
       setSessionStatus('connected');
@@ -154,7 +154,7 @@ const RightSidebar = ({ refreshKey }) => {
                       : <><FileText size={11} style={{ display: 'inline', marginRight: 3 }} />{item.name}</>}
                   </div>
                   <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginTop: 2 }}>
-                    Modified {formatTime(item.updated_at)}
+                    Modified {formatTime(item.updated_at || item.created_at)}
                   </div>
                 </div>
               </div>

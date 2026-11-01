@@ -41,3 +41,15 @@ class User(me.Document):
             "storage_used_bytes": self.storage_used_bytes,
             "created_at": self.created_at.isoformat() if self.created_at else None
         }
+
+class PasswordResetToken(me.Document):
+    user = me.ReferenceField(User, required=True)
+    token_hash = me.StringField(required=True, unique=True)
+    expires_at = me.DateTimeField(required=True)
+    used = me.BooleanField(default=False)
+    created_at = me.DateTimeField(default=datetime.utcnow)
+
+    meta = {
+        'collection': 'password_reset_tokens',
+        'indexes': ['token_hash', 'user', 'expires_at']
+    }
