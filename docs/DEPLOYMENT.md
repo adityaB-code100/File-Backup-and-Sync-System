@@ -78,11 +78,11 @@ pip install -r requirements.txt   # or use the top-level venv
 python gui.py
 ```
 
-The desktop agent reads the backend URL from `app/config.py` (default: `http://127.0.0.1:8000`).  
-Credentials are cached in `app/credentials.json` after first login.
+The desktop agent reads the backend URL from the `VAULTCLOUD_BACKEND_URL` environment variable (default: `http://localhost:8000/api`).  
+Credentials: The account email is remembered in `app/credentials.json` (no passwords stored in plaintext). Passwords are securely stored in the OS-level credential vault via `keyring` (Windows Credential Manager / macOS Keychain / SecretService). If the keyring service is unavailable (e.g. in headless CI environments), the agent securely prompts the user on launch without writing credentials to disk.
 
-> [!WARNING]
-> `app/credentials.json` stores the user's password in plaintext. This is a known risk logged in the reliability audit. Do not deploy to shared machines without replacing this with OS-level credential storage (e.g., Windows Credential Manager).
+> [!NOTE]
+> Plaintext password storage in `app/credentials.json` has been eliminated. The desktop agent automatically migrates existing plaintext credentials to the OS keyring and clears them from disk.
 
 ---
 
@@ -110,6 +110,9 @@ python -m unittest app.test_duplicate_filename -v
 # Cryptographic / backup-consistency audit (10 tests)
 python scratch/audit_crypto_backup.py
 
+# Backend integration test suite (Folder restore, purge, duplicate filenames, locks, storage)
+cd backend && python manage.py test files
+
 # Django system check
 cd backend && python manage.py check
 ```
@@ -120,9 +123,9 @@ cd backend && python manage.py check
 
 - [ ] Set `DEBUG=False` in `backend/.env`
 - [ ] Replace `SECRET_KEY` and `JWT_SIGNING_KEY` with strong random values
-- [ ] Rotate `FILE_ENCRYPTION_KEK` and re-encrypt existing DEKs if necessary
+- [ ] Set `FILE_ENCRYPTION_KEK` with a cryptographically secure 256-bit key
 - [ ] Point `SECONDARY_BACKUP_ROOT` at a **separate physical disk or NAS**
-- [ ] Replace `app/credentials.json` plaintext storage with OS credential manager
+- [x] Secured credential storage via OS keyring (`app/credentials.json` plaintext password eliminated)
 - [ ] Configure HTTPS (TLS certificate) for the backend
 - [ ] Set `ALLOWED_HOSTS` appropriately in `backend/settings.py`
 - [ ] Remove or restrict the Django admin interface

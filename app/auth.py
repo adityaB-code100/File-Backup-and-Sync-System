@@ -4,6 +4,17 @@ import json
 import requests
 import jwt
 
+# Keyring for secure credential storage (replaces plaintext password in credentials.json).
+# Falls back gracefully when keyring is unavailable (CI, headless servers).
+try:
+    import keyring
+    import keyring.errors
+    _KEYRING_AVAILABLE = True
+except ImportError:
+    _KEYRING_AVAILABLE = False
+
+_KEYRING_SERVICE = "vaultcloud"
+
 logger = logging.getLogger(__name__)
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -109,25 +120,91 @@ class VaultCloudAuth:
                 "refresh": self.refresh_token
             }, f)
 
+    def _get_password_from_keyring(self, email: str) -> str | None:
+        """Retrieve password from system keyring. Returns None if unavailable."""
+        if not _KEYRING_AVAILABLE or not email:
+            return None
+        try:
+            return keyring.get_password(_KEYRING_SERVICE, email)
+        except Exception:
+            return None
+
+    def _save_password_to_keyring(self, email: str, password: str) -> bool:
+        """Store password in system keyring. Returns True on success."""
+        if not _KEYRING_AVAILABLE or not email or not password:
+            return False
+        try:
+            keyring.set_password(_KEYRING_SERVICE, email, password)
+            return True
+        except Exception:
+            return False
+
+    def _delete_password_from_keyring(self, email: str) -> None:
+        """Remove stored keyring password. Silent on failure."""
+        if not _KEYRING_AVAILABLE or not email:
+            return
+        try:
+            keyring.delete_password(_KEYRING_SERVICE, email)
+        except Exception:
+            pass
+
+    def _load_credentials_from_disk(self) -> tuple[str | None, str | None]:
+        """Load email from credentials.json; retrieve password from keyring or legacy field."""
+        try:
+            with open(self.creds_path, "r") as f:
+                creds = json.load(f)
+            email = creds.get("email")
+            # Attempt keyring first; fall back to legacy plaintext field
+            password = self._get_password_from_keyring(email) if email else None
+            if not password:
+                # Legacy plaintext — migrate transparently, then wipe from disk
+                password = creds.get("password")
+                if password and email:
+                    migrated = self._save_password_to_keyring(email, password)
+                    if migrated:
+                        # Remove plaintext password from disk
+                        self._save_email_config(email)
+                        logger.info("Migrated plaintext password to system keyring; removed from credentials file.")
+            return email, password
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None, None
+
+    def _save_email_config(self, email: str) -> None:
+        """Persist only the email (no password) to credentials.json."""
+        os.makedirs(os.path.dirname(self.creds_path), exist_ok=True)
+        with open(self.creds_path, "w") as f:
+            json.dump({"email": email}, f)
+
     def login(self):
         email = self.email_arg
         password = self.password_arg
-        
+
         if not email or not password:
-            try:
-                with open(self.creds_path, "r") as f:
-                    creds = json.load(f)
-                    email = creds.get("email")
-                    password = creds.get("password")
-            except (FileNotFoundError, json.JSONDecodeError):
-                logger.error(f"Could not load credentials from '{self.creds_path}'. Please provide --email and --password.")
-                email = input("Email: ")
-                password = input("Password: ")
-                
+            email, password = self._load_credentials_from_disk()
+
+        if not email:
+            logger.error(
+                f"Could not load credentials from '{self.creds_path}'. "
+                "Please provide --email and --password."
+            )
+            email = input("Email: ")
+            password = input("Password: ")
+
+        if not password and email:
+            password = self._get_password_from_keyring(email)
+
+        if not password:
+            password = input(f"Password for {email}: ")
+
         if email and password:
-            os.makedirs(os.path.dirname(self.creds_path), exist_ok=True)
-            with open(self.creds_path, "w") as f:
-                json.dump({"email": email, "password": password}, f)
+            # Persist: email to disk (no plaintext password), password to keyring when possible
+            self._save_email_config(email)
+            saved_to_keyring = self._save_password_to_keyring(email, password)
+            if not saved_to_keyring:
+                logger.warning(
+                    "System keyring unavailable — password not persisted. "
+                    "You will be prompted for the password on next launch."
+                )
 
         logger.info(f"→ Authenticating against {self.backend_url}/auth/login/ for account '{email}'...")
         resp = requests.post(f"{self.backend_url}/auth/login/", json={"email": email, "password": password})
@@ -184,6 +261,37 @@ class VaultCloudAuth:
         except requests.RequestException as e:
             logger.error(f"Failed to fetch user profile: {e}")
             return None
+
+    def logout(self) -> None:
+        """Clear session tokens and in-memory state. Removes keyring entry for remembered account."""
+        # Read email before clearing state
+        email = None
+        if self.current_user:
+            email = self.current_user.get("email")
+        if not email:
+            try:
+                with open(self.creds_path, "r") as f:
+                    email = json.load(f).get("email")
+            except Exception:
+                pass
+
+        # Clear in-memory state
+        self.access_token = None
+        self.refresh_token = None
+        self.current_user = None
+
+        # Remove token file
+        try:
+            if os.path.exists(self.token_path):
+                os.remove(self.token_path)
+        except Exception as e:
+            logger.warning(f"Could not remove token file: {e}")
+
+        # Clear keyring entry so the user is prompted on next launch
+        if email:
+            self._delete_password_from_keyring(email)
+
+        logger.info("Logged out. Session tokens cleared.")
 
 def get_drive_service(email=None, password=None):
     """

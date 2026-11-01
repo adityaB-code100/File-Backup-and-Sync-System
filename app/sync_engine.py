@@ -144,7 +144,8 @@ def _handle_local_change(auth, path: str, watched_dir: str, device_id: str, even
                 
                 # Update name/parent via PATCH
                 # TODO: enforce lock checking during move in a real scenario
-                url = f"http://localhost:8000/api/files/{cloud_id}/"
+                base_api = getattr(auth, 'backend_url', 'http://localhost:8000/api').rstrip('/')
+                url = f"{base_api}/files/{cloud_id}/"
                 headers = auth.get_auth_header()
                 headers['X-Device-Id'] = device_id
                 requests.patch(url, json={"name": new_filename, "parent_id": parent_id}, headers=headers).raise_for_status()
@@ -276,7 +277,8 @@ def reconcile_conflict(auth, full_local_path: str, cloud_id: str, watched_dir: s
         download_file(auth, cloud_id, full_local_path)
     
     # fetch updated metadata
-    resp = requests.get(f"http://localhost:8000/api/files/{cloud_id}/", headers=auth.get_auth_header())
+    base_api = getattr(auth, 'backend_url', 'http://localhost:8000/api').rstrip('/')
+    resp = requests.get(f"{base_api}/files/{cloud_id}/", headers=auth.get_auth_header())
     resp.raise_for_status()
     meta = resp.json()
     new_version = meta.get("version_number", 1)
@@ -374,7 +376,8 @@ def poll_remote_changes(auth, watched_dir: str):
             if not download_success:
                 continue
 
-            resp = requests.get(f"http://localhost:8000/api/files/{cloud_id}/", headers=auth.get_auth_header())
+            base_api = getattr(auth, 'backend_url', 'http://localhost:8000/api').rstrip('/')
+            resp = requests.get(f"{base_api}/files/{cloud_id}/", headers=auth.get_auth_header())
             resp.raise_for_status()
             meta = resp.json()
             new_version = meta.get("version_number", 1)

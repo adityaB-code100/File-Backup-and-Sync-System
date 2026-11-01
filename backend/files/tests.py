@@ -237,3 +237,88 @@ class FilesAndEncryptionTestCase(TestCase):
             format='multipart'
         )
         self.assertEqual(stale_resp.status_code, 409) # Conflict
+
+    def test_folder_restore_and_purge_flow(self):
+        """Test Folder restore and permanent purge endpoints."""
+        # 1. Create a parent folder and a child folder
+        parent_resp = self.client.post('/api/folders/', {'name': 'ParentFolder'}, format='json')
+        self.assertEqual(parent_resp.status_code, 201)
+        parent_id = parent_resp.data['id']
+
+        child_resp = self.client.post('/api/folders/', {'name': 'ChildFolder', 'parent_id': parent_id}, format='json')
+        self.assertEqual(child_resp.status_code, 201)
+        child_id = child_resp.data['id']
+
+        # Add a file in child folder
+        f = SimpleUploadedFile("nested.txt", b"Nested content")
+        file_resp = self.client.post('/api/files/', {'file': f, 'parent_id': child_id}, format='multipart')
+        self.assertEqual(file_resp.status_code, 201)
+        file_id = file_resp.data['id']
+
+        # 2. Cannot purge non-deleted folder
+        purge_fail = self.client.delete(f'/api/folders/{child_id}/purge/')
+        self.assertEqual(purge_fail.status_code, 400)
+
+        # 3. Soft-delete parent folder (recursively soft-deletes child & file)
+        del_resp = self.client.delete(f'/api/folders/{parent_id}/')
+        self.assertEqual(del_resp.status_code, 200)
+
+        # 4. Restore child folder while parent remains deleted -> should reparent to root
+        restore_resp = self.client.post(f'/api/folders/{child_id}/restore/')
+        self.assertEqual(restore_resp.status_code, 200)
+        self.assertFalse(restore_resp.data['deleted'])
+        self.assertIsNone(restore_resp.data['parent_id'])
+
+        # Cannot restore already restored folder
+        restore_fail = self.client.post(f'/api/folders/{child_id}/restore/')
+        self.assertEqual(restore_fail.status_code, 400)
+
+        # 5. Soft-delete child folder again, then purge it permanently
+        self.client.delete(f'/api/folders/{child_id}/')
+        purge_resp = self.client.delete(f'/api/folders/{child_id}/purge/')
+        self.assertEqual(purge_resp.status_code, 200)
+        self.assertIn("permanently deleted", purge_resp.data['detail'])
+
+        # Verify documents removed
+        from bson import ObjectId
+        self.assertIsNone(Folder.objects(id=ObjectId(child_id)).first())
+        self.assertIsNone(File.objects(id=ObjectId(file_id)).first())
+
+    def test_duplicate_filename_handling(self):
+        """Verify stem (1).ext rename pattern for collisions in the same folder."""
+        # 1. Upload initial file
+        f1 = SimpleUploadedFile("report.txt", b"Report 1")
+        resp1 = self.client.post('/api/files/', {'file': f1}, format='multipart')
+        self.assertEqual(resp1.status_code, 201)
+        self.assertEqual(resp1.data['name'], 'report.txt')
+
+        # 2. Upload second file with same name -> should become report (1).txt
+        f2 = SimpleUploadedFile("report.txt", b"Report 2")
+        resp2 = self.client.post('/api/files/', {'file': f2}, format='multipart')
+        self.assertEqual(resp2.status_code, 201)
+        self.assertEqual(resp2.data['name'], 'report (1).txt')
+
+        # 3. Multi-dot extension: archive.tar.gz
+        f3 = SimpleUploadedFile("archive.tar.gz", b"Archive 1")
+        resp3 = self.client.post('/api/files/', {'file': f3}, format='multipart')
+        self.assertEqual(resp3.status_code, 201)
+        self.assertEqual(resp3.data['name'], 'archive.tar.gz')
+
+        f4 = SimpleUploadedFile("archive.tar.gz", b"Archive 2")
+        resp4 = self.client.post('/api/files/', {'file': f4}, format='multipart')
+        self.assertEqual(resp4.status_code, 201)
+        self.assertEqual(resp4.data['name'], 'archive.tar (1).gz')
+
+    def test_storage_usage_and_backup_status_endpoints(self):
+        """Verify storage usage includes file_count and backup-status responds."""
+        # Check storage usage
+        usage_resp = self.client.get('/api/storage/usage/')
+        self.assertEqual(usage_resp.status_code, 200)
+        self.assertIn('file_count', usage_resp.data)
+        self.assertIn('storage_used_bytes', usage_resp.data)
+
+        # Check backup status
+        backup_resp = self.client.get('/api/storage/backup-status/')
+        self.assertEqual(backup_resp.status_code, 200)
+        self.assertIn('backup_destination', backup_resp.data)
+        self.assertIn('secondary_backup_path', backup_resp.data)

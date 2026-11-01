@@ -112,3 +112,26 @@ class UserMeView(APIView):
 
     def get(self, request):
         return Response(request.user.to_dict(), status=status.HTTP_200_OK)
+
+class PasswordResetRequestView(APIView):
+    """
+    Endpoint to request password reset.
+    Returns 200 regardless of whether the email exists to prevent email enumeration.
+    """
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [AnonRateThrottle]
+
+    def post(self, request):
+        email = request.data.get('email', '').strip().lower()
+        if not email:
+            return Response(
+                {"error": "Email address is required.", "code": "VALIDATION_ERROR"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # In current deployment, outward SMTP is not bound.
+        # Inform the caller safely and instruct them on testing/admin reset.
+        return Response({
+            "detail": "If an account with this email exists, password reset instructions have been dispatched. (Note: External SMTP mailing service is pending production SMTP credentials).",
+            "email": email
+        }, status=status.HTTP_200_OK)

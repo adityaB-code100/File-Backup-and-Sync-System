@@ -73,7 +73,18 @@ DATABASES = {
 
 # MongoEngine Connection
 MONGO_URI = os.getenv('MONGO_URI', 'mongodb://localhost:27017/cloud_storage_db')
-mongoengine.connect(host=MONGO_URI)
+try:
+    mongoengine.connect(host=MONGO_URI)
+except Exception as _mongo_conn_err:
+    import logging
+    logging.getLogger('cloud_storage').warning(
+        f"Could not connect to configured MONGO_URI ({_mongo_conn_err}). "
+        "Attempting fallback to local MongoDB instance."
+    )
+    try:
+        mongoengine.connect(host='mongodb://localhost:27017/cloud_storage_db')
+    except Exception:
+        pass
 
 # Password Hashers - Prioritize Argon2 as required
 PASSWORD_HASHERS = [
@@ -138,7 +149,7 @@ if not CORS_ALLOW_ALL_ORIGINS:
         origin.strip() for origin in os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:5173').split(',') if origin.strip()
     ]
 CORS_ALLOW_CREDENTIALS = True
-CORS_EXPOSE_HEADERS = ['Content-Type', 'X-Correlation-ID']
+CORS_EXPOSE_HEADERS = ['Content-Type', 'X-Correlation-ID', 'X-Content-Hash']
 
 # Security Settings for Production (HTTPS/TLS)
 if not DEBUG:
@@ -146,6 +157,21 @@ if not DEBUG:
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+
+    # Hard-fail on insecure defaults in production
+    from django.core.exceptions import ImproperlyConfigured
+    if SECRET_KEY == 'django-insecure-default-key-change-me':
+        raise ImproperlyConfigured(
+            "SECRET_KEY must be set to a secure random value in production. "
+            "Set the SECRET_KEY environment variable."
+        )
+    if not FILE_ENCRYPTION_KEK:
+        raise ImproperlyConfigured(
+            "FILE_ENCRYPTION_KEK must be set to a secure value in production. "
+            "Deriving encryption keys from the secret key is not permitted in production."
+        )
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,

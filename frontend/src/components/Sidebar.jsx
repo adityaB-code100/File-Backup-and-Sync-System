@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { HardDrive, Trash2, Cloud, LogOut, ShieldCheck } from 'lucide-react';
+import {
+  Cloud, HardDrive, Trash2, LogOut, ShieldCheck,
+  RefreshCw, Smartphone, Lock, X
+} from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
 
-const Sidebar = ({ activeTab, setActiveTab }) => {
+const Sidebar = ({ activeTab, setActiveTab, mobileOpen, onClose }) => {
   const { user, logout } = useAuth();
   const [storageInfo, setStorageInfo] = useState({
     storage_used_bytes: 0,
@@ -16,7 +19,7 @@ const Sidebar = ({ activeTab, setActiveTab }) => {
       const res = await api.get('/storage/usage/');
       setStorageInfo(res.data);
     } catch (e) {
-      console.error("Failed to fetch storage usage", e);
+      console.error('Failed to fetch storage usage', e);
     }
   };
 
@@ -35,94 +38,113 @@ const Sidebar = ({ activeTab, setActiveTab }) => {
   };
 
   const isWarning = storageInfo.usage_percentage > 85;
+  const userInitial = (user?.email || 'U')[0].toUpperCase();
+
+  const navItems = [
+    { id: 'drive', icon: <HardDrive size={17} />, label: 'My Drive' },
+    { id: 'trash', icon: <Trash2 size={17} />, label: 'Trash / Recycled' },
+  ];
+
+  const infoItems = [
+    { icon: <Lock size={14} />, label: 'End-to-End Encrypted', color: 'var(--accent-emerald)' },
+    { icon: <RefreshCw size={14} />, label: 'Real-Time Sync', color: 'var(--primary)' },
+    { icon: <Smartphone size={14} />, label: 'Multi-Device Access', color: 'var(--accent-purple)' },
+  ];
 
   return (
-    <aside className="sidebar">
-      {/* Brand Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '32px' }}>
-        <div style={{
-          width: '42px',
-          height: '42px',
-          borderRadius: '10px',
-          background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          boxShadow: '0 0 15px rgba(59, 130, 246, 0.4)'
-        }}>
-          <Cloud size={24} color="#fff" />
+    <aside className={`sidebar ${mobileOpen ? 'mobile-open' : ''}`}>
+      {/* Mobile close btn */}
+      <button
+        onClick={onClose}
+        className="btn-ghost btn btn-icon"
+        style={{ alignSelf: 'flex-end', marginBottom: 8, display: 'none' }}
+        aria-label="Close menu"
+        id="sidebar-close-btn"
+      >
+        <X size={18} />
+      </button>
+
+      {/* Logo */}
+      <div className="sidebar-logo">
+        <div className="sidebar-logo-icon">
+          <Cloud size={22} color="#fff" />
         </div>
-        <div>
-          <h2 style={{ fontSize: '1.25rem', fontWeight: '700', letterSpacing: '-0.5px' }}>VaultCloud</h2>
-          <span style={{ fontSize: '0.75rem', color: '#10b981', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <ShieldCheck size={12} /> Encrypted Storage
-          </span>
+        <div className="sidebar-logo-text">
+          <h2>CloudSyncVault</h2>
+          <span><ShieldCheck size={11} /> Encrypted Storage</span>
         </div>
       </div>
 
-      {/* Navigation Links */}
-      <nav style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: 1 }}>
-        <button
-          onClick={() => setActiveTab('drive')}
-          className={`btn ${activeTab === 'drive' ? 'btn-primary' : 'btn-secondary'}`}
-          style={{ justifyContent: 'flex-start', padding: '12px 16px', border: activeTab === 'drive' ? 'none' : '1px solid transparent' }}
-        >
-          <HardDrive size={18} />
-          My Drive
-        </button>
-
-        <button
-          onClick={() => setActiveTab('trash')}
-          className={`btn ${activeTab === 'trash' ? 'btn-primary' : 'btn-secondary'}`}
-          style={{ justifyContent: 'flex-start', padding: '12px 16px', border: activeTab === 'trash' ? 'none' : '1px solid transparent' }}
-        >
-          <Trash2 size={18} />
-          Trash / Recycled
-        </button>
+      {/* Main Nav */}
+      <span className="sidebar-section-label">Navigation</span>
+      <nav className="sidebar-nav">
+        {navItems.map(({ id, icon, label }) => (
+          <button
+            key={id}
+            className={`sidebar-nav-item ${activeTab === id ? 'active' : ''}`}
+            onClick={() => { setActiveTab(id); onClose(); }}
+            aria-current={activeTab === id ? 'page' : undefined}
+          >
+            {icon}
+            {label}
+          </button>
+        ))}
       </nav>
 
+      {/* Info items */}
+      <span className="sidebar-section-label" style={{ marginTop: 16 }}>Platform</span>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {infoItems.map(({ icon, label, color }) => (
+          <div
+            key={label}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              padding: '8px 12px', fontSize: '0.82rem',
+              color: 'var(--text-dim)', borderRadius: 'var(--radius-sm)',
+            }}
+          >
+            <span style={{ color }}>{icon}</span>
+            {label}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ flex: 1 }} />
+
       {/* Storage Indicator */}
-      <div style={{
-        background: 'rgba(255, 255, 255, 0.03)',
-        border: '1px solid var(--border-color)',
-        borderRadius: '12px',
-        padding: '16px',
-        marginBottom: '20px'
-      }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '8px' }}>
-          <span style={{ color: 'var(--text-muted)' }}>Storage</span>
-          <span style={{ fontWeight: '600' }}>{storageInfo.usage_percentage}%</span>
+      <div className="sidebar-info-card">
+        <div className="sidebar-storage-label">
+          <span style={{ color: 'var(--text-muted)', fontWeight: 600, fontSize: '0.8rem' }}>Storage</span>
+          <span style={{ fontWeight: 700, fontSize: '0.82rem', color: isWarning ? 'var(--accent-rose)' : 'var(--text-main)' }}>
+            {storageInfo.usage_percentage}%
+          </span>
         </div>
-        <div className="progress-bar" style={{ marginBottom: '10px' }}>
+        <div className="progress-bar" style={{ marginBottom: 10 }}>
           <div
             className={`progress-fill ${isWarning ? 'warning' : ''}`}
             style={{ width: `${Math.min(storageInfo.usage_percentage, 100)}%` }}
           />
         </div>
-        <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', textAlign: 'right' }}>
-          {formatBytes(storageInfo.storage_used_bytes)} / {formatBytes(storageInfo.storage_quota_bytes)}
+        <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', display: 'flex', justifyContent: 'space-between' }}>
+          <span>{formatBytes(storageInfo.storage_used_bytes)} used</span>
+          <span>{formatBytes(storageInfo.storage_quota_bytes)} total</span>
         </div>
       </div>
 
       {/* User Footer */}
-      <div style={{
-        borderTop: '1px solid var(--border-color)',
-        paddingTop: '16px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between'
-      }}>
-        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '160px' }}>
-          <div style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-main)' }}>
-            {user?.email}
-          </div>
+      <div className="sidebar-user">
+        <div className="sidebar-avatar">{userInitial}</div>
+        <div className="sidebar-user-info">
+          <div className="sidebar-user-email" title={user?.email}>{user?.email}</div>
+          <div className="sidebar-user-role">Personal Account</div>
         </div>
         <button
           onClick={logout}
           title="Sign Out"
-          style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '6px' }}
+          className="btn btn-ghost btn-icon"
+          aria-label="Sign out"
         >
-          <LogOut size={18} />
+          <LogOut size={16} />
         </button>
       </div>
     </aside>

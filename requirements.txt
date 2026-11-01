@@ -18,3 +18,4 @@ watchdog>=4.0.0
 requests>=2.31.0
 tenacity>=8.2.0
 PyJWT>=2.8.0
+keyring>=24.0.0        # Secure credential storage (password never stored in plaintext)

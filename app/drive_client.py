@@ -7,8 +7,8 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 
 logger = logging.getLogger(__name__)
 
-# Replace these appropriately in real config
-BACKEND_URL = "http://localhost:8000/api"
+# Backend API URL (configurable via environment variable)
+BACKEND_URL = os.getenv("VAULTCLOUD_BACKEND_URL", "http://localhost:8000/api").rstrip("/")
 
 def is_transient_error(exception: Exception) -> bool:
     """Predicate for tenacity retry: only retries transient HTTP/network errors."""

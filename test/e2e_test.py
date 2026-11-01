@@ -9,7 +9,9 @@ import subprocess
 # Ensure we're running from root
 os.chdir(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-BACKEND_URL = "http://localhost:8000/api"
+TEST_EMAIL = os.getenv("TEST_USER_EMAIL", "test@example.com")
+TEST_PASSWORD = os.getenv("TEST_USER_PASSWORD", "Password123!")
+BACKEND_URL = os.getenv("VAULTCLOUD_BACKEND_URL", "http://localhost:8000/api")
 CRED_FILE = "credentials.json"
 SYNC_DIR = "synced_folder"
 
@@ -20,16 +22,16 @@ if os.path.exists(SYNC_DIR):
 os.makedirs(SYNC_DIR, exist_ok=True)
 import json
 with open(CRED_FILE, "w") as f:
-    json.dump({"email": "test@example.com", "password": "Password123!"}, f)
+    json.dump({"email": TEST_EMAIL, "password": TEST_PASSWORD}, f)
 
 # Try to register user, ignore if exists
 try:
-    requests.post(f"{BACKEND_URL}/auth/register/", json={"email": "test@example.com", "password": "Password123!"})
+    requests.post(f"{BACKEND_URL}/auth/register/", json={"email": TEST_EMAIL, "password": TEST_PASSWORD})
 except:
     pass
 
 # Login to get API token for assertions
-resp = requests.post(f"{BACKEND_URL}/auth/login/", json={"email": "test@example.com", "password": "Password123!"})
+resp = requests.post(f"{BACKEND_URL}/auth/login/", json={"email": TEST_EMAIL, "password": TEST_PASSWORD})
 token = resp.json()["access"]
 headers = {"Authorization": f"Bearer {token}"}
 
@@ -90,4 +92,9 @@ assert os.path.exists(os.path.join(SYNC_DIR, "cloud_created.txt")), "Cloud -> Lo
 print("Cloud -> Local sync works")
 
 agent_proc.terminate()
+try:
+    if os.path.exists(CRED_FILE):
+        os.remove(CRED_FILE)
+except Exception:
+    pass
 print("Basic E2E Tests Passed")

@@ -1,38 +1,99 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Folder,
-  FileText,
-  FileCode,
-  Image as ImageIcon,
-  Film,
-  Music,
-  Archive,
-  Download,
-  Edit2,
-  Trash2,
-  History,
-  Move,
-  ChevronRight,
-  UploadCloud,
-  File as GenericFile,
-  Lock
+  Folder, FileText, FileCode, Image as ImageIcon, Film, Music, Archive,
+  Download, Edit2, Trash2, History, Move, ChevronRight, UploadCloud,
+  File as GenericFile, Star, StarOff, Eye, Lock,
 } from 'lucide-react';
 import api from '../services/api';
 import VersionHistoryModal from './VersionHistoryModal';
 import MoveModal from './MoveModal';
 
-const FileBrowser = ({ searchQuery, viewMode, onRefreshStorage }) => {
+// ── File type icon ─────────────────────────────────────────────
+const getFileIcon = (filename, type, size = 28) => {
+  if (type === 'folder') return <Folder size={size} color="var(--accent-cyan)" />;
+  const ext = (filename || '').split('.').pop().toLowerCase();
+  if (['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp', 'avif'].includes(ext))
+    return <ImageIcon size={size} color="var(--accent-emerald)" />;
+  if (['mp4', 'mkv', 'avi', 'mov', 'webm'].includes(ext))
+    return <Film size={size} color="var(--accent-rose)" />;
+  if (['mp3', 'wav', 'flac', 'aac', 'ogg'].includes(ext))
+    return <Music size={size} color="var(--accent-purple)" />;
+  if (['zip', 'rar', 'tar', 'gz', '7z', 'bz2'].includes(ext))
+    return <Archive size={size} color="var(--accent-amber)" />;
+  if (['js', 'py', 'html', 'css', 'json', 'ts', 'jsx', 'tsx', 'sh', 'yaml', 'yml'].includes(ext))
+    return <FileCode size={size} color="var(--primary)" />;
+  return <FileText size={size} color="var(--text-dim)" />;
+};
+
+const formatBytes = (bytes) => {
+  if (!bytes) return '—';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+};
+
+const formatDate = (d) => {
+  if (!d) return '—';
+  return new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+};
+
+// ── Skeleton loader ───────────────────────────────────────────
+const SkeletonRow = () => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 18px', borderRadius: 'var(--radius-md)', marginBottom: 6, background: 'var(--bg-card)', border: '1px solid var(--border-color)' }}>
+    <div className="skeleton" style={{ width: 32, height: 32, borderRadius: 8, flexShrink: 0 }} />
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div className="skeleton" style={{ height: 14, width: '55%', borderRadius: 4 }} />
+      <div className="skeleton" style={{ height: 11, width: '30%', borderRadius: 4 }} />
+    </div>
+    <div className="skeleton" style={{ height: 12, width: 60, borderRadius: 4 }} />
+    <div className="skeleton" style={{ height: 12, width: 80, borderRadius: 4 }} />
+    <div style={{ display: 'flex', gap: 6 }}>
+      {[1, 2, 3].map((n) => <div key={n} className="skeleton" style={{ width: 30, height: 30, borderRadius: 6 }} />)}
+    </div>
+  </div>
+);
+
+const SkeletonGrid = () => (
+  <div className="file-grid">
+    {Array.from({ length: 8 }).map((_, i) => (
+      <div key={i} style={{ borderRadius: 'var(--radius-md)', padding: '18px', background: 'var(--bg-card)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div className="skeleton" style={{ width: 36, height: 36, borderRadius: 8 }} />
+        <div className="skeleton" style={{ height: 13, width: '80%', borderRadius: 4 }} />
+        <div className="skeleton" style={{ height: 10, width: '50%', borderRadius: 4 }} />
+      </div>
+    ))}
+  </div>
+);
+
+// ─────────────────────────────────────────────────────────────
+const FileBrowser = ({ searchQuery, viewMode, onRefreshStorage, onFolderChange }) => {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [breadcrumbs, setBreadcrumbs] = useState([{ id: 'root', name: 'My Drive' }]);
   const [currentFolderId, setCurrentFolderId] = useState('root');
   const [dragOver, setDragOver] = useState(false);
-
-  // Modals state
   const [versionModalFile, setVersionModalFile] = useState(null);
   const [moveModalItem, setMoveModalItem] = useState(null);
+  // Device-local favorites stored in localStorage (independent per browser/device)
+  const [favourites, setFavourites] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('csv_favourites') || '[]'); }
+    catch { return []; }
+  });
 
-  const fetchItems = async (folderId, search) => {
+  const saveFavourites = (fav) => {
+    setFavourites(fav);
+    localStorage.setItem('csv_favourites', JSON.stringify(fav));
+  };
+
+  const toggleFavourite = (id) => {
+    const next = favourites.includes(id)
+      ? favourites.filter((f) => f !== id)
+      : [...favourites, id];
+    saveFavourites(next);
+  };
+
+  const fetchItems = useCallback(async (folderId, search) => {
     setLoading(true);
     try {
       let url = '/files/?trashed=false';
@@ -43,32 +104,33 @@ const FileBrowser = ({ searchQuery, viewMode, onRefreshStorage }) => {
       } else {
         url += '&parent_id=root';
       }
-
       const res = await api.get(url);
       setItems(res.data.results || []);
     } catch (e) {
-      console.error("Error fetching files:", e);
+      console.error('Error fetching files:', e);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchItems(currentFolderId, searchQuery);
-  }, [currentFolderId, searchQuery]);
+  }, [currentFolderId, searchQuery, fetchItems]);
 
   const handleOpenFolder = (folder) => {
     setBreadcrumbs((prev) => [...prev, { id: folder.id, name: folder.name }]);
     setCurrentFolderId(folder.id);
+    if (onFolderChange) onFolderChange(folder.id);
   };
 
   const handleBreadcrumbClick = (index) => {
     const newCrumbs = breadcrumbs.slice(0, index + 1);
     setBreadcrumbs(newCrumbs);
-    setCurrentFolderId(newCrumbs[newCrumbs.length - 1].id);
+    const newId = newCrumbs[newCrumbs.length - 1].id;
+    setCurrentFolderId(newId);
+    if (onFolderChange) onFolderChange(newId);
   };
 
-  // Upload handler (drag-and-drop or file input)
   const uploadFiles = async (filesToUpload) => {
     for (let i = 0; i < filesToUpload.length; i++) {
       const file = filesToUpload[i];
@@ -77,8 +139,6 @@ const FileBrowser = ({ searchQuery, viewMode, onRefreshStorage }) => {
       if (currentFolderId && currentFolderId !== 'root') {
         formData.append('parent_id', currentFolderId);
       }
-      formData.append('operation_id', crypto.randomUUID());
-
       try {
         await api.post('/files/', formData, {
           headers: { 'Content-Type': 'multipart/form-data' },
@@ -102,9 +162,7 @@ const FileBrowser = ({ searchQuery, viewMode, onRefreshStorage }) => {
   const handleDownload = async (item) => {
     if (item.type === 'folder') return;
     try {
-      const res = await api.get(`/files/${item.id}/content/`, {
-        responseType: 'blob',
-      });
+      const res = await api.get(`/files/${item.id}/content/`, { responseType: 'blob' });
       const url = window.URL.createObjectURL(new Blob([res.data]));
       const link = document.createElement('a');
       link.href = url;
@@ -112,89 +170,92 @@ const FileBrowser = ({ searchQuery, viewMode, onRefreshStorage }) => {
       document.body.appendChild(link);
       link.click();
       link.remove();
+      window.URL.revokeObjectURL(url);
     } catch (e) {
-      alert("Failed to download file.");
+      if (e.response?.status === 423) {
+        alert(`"${item.name}" is locked by another device and cannot be downloaded right now.`);
+      } else {
+        alert('Failed to download file.');
+      }
     }
   };
 
-  // Optimistic UI updates for Rename & Delete
   const handleRename = async (item) => {
-    if (item.is_locked) {
-      alert("This file is currently being edited on another device.");
-      return;
-    }
-    const newName = prompt("Enter new name:", item.name);
+    const newName = prompt('Enter new name:', item.name);
     if (!newName || newName === item.name) return;
-
-    // Optimistic update
     const previousItems = [...items];
-    setItems(items.map(i => i.id === item.id ? { ...i, name: newName } : i));
-
+    setItems(items.map((i) => (i.id === item.id ? { ...i, name: newName } : i)));
     try {
       const endpoint = item.type === 'folder' ? `/folders/${item.id}/` : `/files/${item.id}/`;
       await api.patch(endpoint, { name: newName });
     } catch (e) {
-      setItems(previousItems); // Rollback
+      setItems(previousItems);
       if (e.response?.status === 423) {
-        alert("This file is currently being edited on another device.");
+        alert(`"${item.name}" is locked by another device and cannot be renamed right now.`);
       } else {
-        alert("Failed to rename item.");
+        alert('Failed to rename item.');
       }
-      fetchItems(currentFolderId, searchQuery);
     }
   };
 
   const handleDelete = async (item) => {
-    if (item.is_locked) {
-      alert("This file is currently being edited on another device.");
-      return;
-    }
     if (!window.confirm(`Move "${item.name}" to trash?`)) return;
-
-    // Optimistic update
     const previousItems = [...items];
-    setItems(items.filter(i => i.id !== item.id));
-
+    setItems(items.filter((i) => i.id !== item.id));
     try {
       const endpoint = item.type === 'folder' ? `/folders/${item.id}/` : `/files/${item.id}/`;
       await api.delete(endpoint);
       if (onRefreshStorage) onRefreshStorage();
     } catch (e) {
-      setItems(previousItems); // Rollback
+      setItems(previousItems);
       if (e.response?.status === 423) {
-        alert("This file is currently being edited on another device.");
+        alert(`"${item.name}" is locked by another device and cannot be deleted right now.`);
       } else {
-        alert("Failed to delete item.");
+        alert('Failed to delete item.');
       }
-      fetchItems(currentFolderId, searchQuery);
     }
   };
 
-  const handleMoveClick = (item) => {
-    if (item.is_locked) {
-      alert("This file is currently being edited on another device.");
-      return;
-    }
-    setMoveModalItem(item);
-  };
-
-  const getFileIcon = (filename, type) => {
-    if (type === 'folder') return <Folder size={32} color="#06b6d4" />;
-    const ext = filename.split('.').pop().toLowerCase();
-    if (['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp'].includes(ext)) return <ImageIcon size={32} color="#10b981" />;
-    if (['mp4', 'mkv', 'avi', 'mov'].includes(ext)) return <Film size={32} color="#f43f5e" />;
-    if (['mp3', 'wav', 'flac'].includes(ext)) return <Music size={32} color="#8b5cf6" />;
-    if (['zip', 'rar', 'tar', 'gz', '7z'].includes(ext)) return <Archive size={32} color="#f59e0b" />;
-    if (['js', 'py', 'html', 'css', 'json', 'ts', 'jsx'].includes(ext)) return <FileCode size={32} color="#3b82f6" />;
-    return <FileText size={32} color="#9ca3af" />;
-  };
-
-  const formatBytes = (bytes) => {
-    if (!bytes) return '-';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  // ── Action Buttons (shared) ──────────────────────────────────
+  const ActionButtons = ({ item, compact = false }) => {
+    const p = compact ? '5px' : '7px 10px';
+    const isFav = favourites.includes(item.id);
+    return (
+      <div style={{ display: 'flex', gap: 5, flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
+        <button
+          className="btn btn-ghost btn-icon"
+          title={isFav ? 'Remove favourite' : 'Add favourite'}
+          onClick={() => toggleFavourite(item.id)}
+          style={{ padding: p, color: isFav ? 'var(--accent-amber)' : undefined }}
+        >
+          {isFav ? <Star size={14} fill="currentColor" /> : <StarOff size={14} />}
+        </button>
+        {item.type === 'file' && (
+          <>
+            <button className="btn btn-ghost btn-icon" style={{ padding: p }} title="Download" onClick={() => handleDownload(item)}>
+              <Download size={14} />
+            </button>
+            <button className="btn btn-ghost btn-icon" style={{ padding: p }} title="Version History" onClick={() => setVersionModalFile(item)}>
+              <History size={14} />
+            </button>
+          </>
+        )}
+        <button className="btn btn-ghost btn-icon" style={{ padding: p }} title="Rename" onClick={() => handleRename(item)}>
+          <Edit2 size={14} />
+        </button>
+        <button className="btn btn-ghost btn-icon" style={{ padding: p }} title="Move" onClick={() => setMoveModalItem(item)}>
+          <Move size={14} />
+        </button>
+        <button
+          className="btn btn-ghost btn-icon"
+          style={{ padding: p, color: 'var(--accent-rose)' }}
+          title="Move to Trash"
+          onClick={() => handleDelete(item)}
+        >
+          <Trash2 size={14} />
+        </button>
+      </div>
+    );
   };
 
   return (
@@ -202,189 +263,187 @@ const FileBrowser = ({ searchQuery, viewMode, onRefreshStorage }) => {
       onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
       onDragLeave={() => setDragOver(false)}
       onDrop={handleDrop}
-      style={{ position: 'relative', minHeight: 'calc(100vh - 150px)' }}
+      style={{ position: 'relative', minHeight: 'calc(100vh - 180px)' }}
     >
-      {/* Drag overlay notice */}
+      {/* Drag Overlay */}
       {dragOver && (
-        <div style={{
-          position: 'absolute',
-          inset: 0,
-          background: 'rgba(59, 130, 246, 0.15)',
-          border: '2px dashed var(--primary)',
-          borderRadius: '16px',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 20,
-          backdropFilter: 'blur(4px)'
-        }}>
-          <UploadCloud size={64} color="var(--primary)" />
-          <h3 style={{ fontSize: '1.4rem', marginTop: '12px' }}>Drop files to upload</h3>
+        <div className="drop-zone">
+          <UploadCloud size={60} color="var(--primary)" />
+          <h3 style={{ fontSize: '1.3rem', fontWeight: 700, marginTop: 14, color: 'var(--primary)' }}>
+            Drop files to upload
+          </h3>
+          <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginTop: 6 }}>
+            Files will be encrypted and uploaded to current folder
+          </p>
         </div>
       )}
 
       {/* Breadcrumb Navigation */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px', flexWrap: 'wrap' }}>
+      <div className="breadcrumb">
         {breadcrumbs.map((b, idx) => (
           <React.Fragment key={b.id}>
-            {idx > 0 && <ChevronRight size={16} color="var(--text-dim)" />}
+            {idx > 0 && <ChevronRight size={14} color="var(--text-dim)" />}
             <button
               onClick={() => handleBreadcrumbClick(idx)}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: idx === breadcrumbs.length - 1 ? 'var(--text-main)' : 'var(--text-muted)',
-                fontWeight: idx === breadcrumbs.length - 1 ? '600' : '400',
-                cursor: 'pointer',
-                fontSize: '1rem',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}
+              className={`breadcrumb-btn ${idx === breadcrumbs.length - 1 ? 'active' : ''}`}
             >
-              {idx === 0 && <Folder size={18} color="var(--primary)" />}
+              {idx === 0 && <Folder size={15} color="var(--primary)" />}
               {b.name}
             </button>
           </React.Fragment>
         ))}
       </div>
 
-      {/* Content Rendering */}
+      {/* Content */}
       {loading ? (
-        <p style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '40px' }}>Loading items...</p>
+        viewMode === 'grid' ? <SkeletonGrid /> : <>{Array.from({ length: 6 }).map((_, i) => <SkeletonRow key={i} />)}</>
       ) : items.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-muted)' }}>
-          <GenericFile size={48} style={{ opacity: 0.3, marginBottom: '12px' }} />
-          <p style={{ fontSize: '1.1rem' }}>No files or folders found in this location.</p>
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-dim)', marginTop: '6px' }}>
-            Drag & drop files here or click "Upload File" above.
+        <div className="empty-state">
+          <div className="empty-state-icon">
+            <UploadCloud size={64} />
+          </div>
+          <h3>No files or folders here</h3>
+          <p>
+            {searchQuery
+              ? `No results for "${searchQuery}"`
+              : 'Drag & drop files here or click Upload to get started'}
           </p>
         </div>
       ) : viewMode === 'grid' ? (
-        /* GRID VIEW */
+        /* ── GRID VIEW ── */
         <div className="file-grid">
-          {items.map((item) => (
-            <div
-              key={item.id}
-              className="glass-card"
-              style={{ padding: '20px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', cursor: item.type === 'folder' ? 'pointer' : 'default' }}
-              onClick={() => item.type === 'folder' && handleOpenFolder(item)}
-            >
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
-                  {getFileIcon(item.name, item.type)}
+          {items.map((item) => {
+            const isFav = favourites.includes(item.id);
+            return (
+              <div
+                key={item.id}
+                className="glass-card"
+                style={{
+                  padding: '18px', display: 'flex', flexDirection: 'column',
+                  gap: 0, cursor: item.type === 'folder' ? 'pointer' : 'default',
+                  borderLeft: isFav ? '3px solid var(--accent-amber)' : undefined,
+                }}
+                onClick={() => item.type === 'folder' && handleOpenFolder(item)}
+              >
+                {/* Top: icon + hash */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+                  <div style={{
+                    width: 44, height: 44, borderRadius: 10,
+                    background: item.type === 'folder' ? 'rgba(6,182,212,0.1)' : 'rgba(59,130,246,0.06)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    {getFileIcon(item.name, item.type, 22)}
+                  </div>
                   {item.type === 'file' && (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
-                      {item.is_locked && (
-                        <div title="Locked for editing" style={{ background: '#fee2e2', color: '#ef4444', padding: '2px 6px', borderRadius: '4px', display: 'flex', alignItems: 'center', fontSize: '0.75rem', fontWeight: 'bold' }}>
-                          <Lock size={12} style={{ marginRight: '4px' }}/> Locked
-                        </div>
-                      )}
-                      <span className="hash-badge" title={`v${item.version_number || 1} SHA-256`}>
-                        v{item.version_number || 1}
-                      </span>
-                    </div>
+                    <span className="hash-badge" title="SHA-256">
+                      {item.content_hash ? item.content_hash.slice(0, 7) : 'File'}
+                    </span>
                   )}
                 </div>
-                <h4 style={{ fontSize: '0.95rem', fontWeight: '600', marginBottom: '6px', wordBreak: 'break-word' }}>
-                  {item.name}
+
+                {/* Name & Size */}
+                <h4 style={{ fontSize: '0.88rem', fontWeight: 700, marginBottom: 4, wordBreak: 'break-word', lineHeight: 1.3, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.name}</span>
+                  {item.is_locked && (
+                    <span title={`Locked by device: ${item.lock_device_id || 'active lock'}`} style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--accent-amber)', flexShrink: 0 }}>
+                      <Lock size={12} />
+                    </span>
+                  )}
                 </h4>
-                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                <div style={{ fontSize: '0.76rem', color: 'var(--text-dim)', marginBottom: 14 }}>
                   {item.type === 'file' ? formatBytes(item.size) : 'Folder'}
+                  {item.updated_at && <span style={{ marginLeft: 8 }}>· {formatDate(item.updated_at)}</span>}
+                </div>
+
+                {/* Actions */}
+                <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: 10 }}>
+                  <ActionButtons item={item} compact />
                 </div>
               </div>
-
-              {/* Action Buttons */}
-              <div
-                style={{ display: 'flex', gap: '6px', marginTop: '16px', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}
-                onClick={(e) => e.stopPropagation()}
-              >
-                {item.type === 'file' && (
-                  <>
-                    <button className="btn btn-secondary" style={{ padding: '6px' }} title="Download" onClick={() => handleDownload(item)}>
-                      <Download size={15} />
-                    </button>
-                    <button className="btn btn-secondary" style={{ padding: '6px' }} title="Version History" onClick={() => setVersionModalFile(item)}>
-                      <History size={15} />
-                    </button>
-                  </>
-                )}
-                <button className="btn btn-secondary" style={{ padding: '6px' }} title="Rename" onClick={() => handleRename(item)}>
-                  <Edit2 size={15} />
-                </button>
-                <button className="btn btn-secondary" style={{ padding: '6px' }} title="Move" onClick={() => handleMoveClick(item)}>
-                  <Move size={15} />
-                </button>
-                <button className="btn btn-secondary" style={{ padding: '6px', color: 'var(--accent-rose)' }} title="Move to Trash" onClick={() => handleDelete(item)}>
-                  <Trash2 size={15} />
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       ) : (
-        /* LIST VIEW */
-        <div className="file-list">
-          {items.map((item) => (
-            <div
-              key={item.id}
-              className="glass-card"
-              style={{ padding: '12px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: item.type === 'folder' ? 'pointer' : 'default' }}
-              onClick={() => item.type === 'folder' && handleOpenFolder(item)}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1 }}>
-                {getFileIcon(item.name, item.type)}
-                <div>
-                  <div style={{ fontWeight: '600', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    {item.name}
-                    {item.is_locked && <Lock size={14} color="#ef4444" title="Locked for editing" />}
+        /* ── LIST VIEW ── */
+        <div>
+          {/* Table Header */}
+          <div className="file-table-header" style={{ display: 'grid', gridTemplateColumns: '2fr 0.7fr 0.9fr 1fr auto', gap: 12 }}>
+            <span>Name</span>
+            <span>Size</span>
+            <span>Type</span>
+            <span>Modified</span>
+            <span>Actions</span>
+          </div>
+          <div className="file-list">
+            {items.map((item) => {
+              const isFav = favourites.includes(item.id);
+              const ext = item.name.split('.').pop().toUpperCase();
+              return (
+                <div
+                  key={item.id}
+                  className="glass-card"
+                  style={{
+                    padding: '12px 16px',
+                    display: 'grid',
+                    gridTemplateColumns: '2fr 0.7fr 0.9fr 1fr auto',
+                    gap: 12,
+                    alignItems: 'center',
+                    cursor: item.type === 'folder' ? 'pointer' : 'default',
+                    borderLeft: isFav ? '3px solid var(--accent-amber)' : undefined,
+                  }}
+                  onClick={() => item.type === 'folder' && handleOpenFolder(item)}
+                >
+                  {/* Name col */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                    <div style={{
+                      width: 36, height: 36, borderRadius: 8, flexShrink: 0,
+                      background: item.type === 'folder' ? 'rgba(6,182,212,0.1)' : 'rgba(59,130,246,0.06)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}>
+                      {getFileIcon(item.name, item.type, 18)}
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, fontSize: '0.88rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.name}</span>
+                        {item.is_locked && (
+                          <span title={`Locked by device: ${item.lock_device_id || 'active lock'}`} style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--accent-amber)', flexShrink: 0 }}>
+                            <Lock size={12} />
+                          </span>
+                        )}
+                      </div>
+                      {item.content_hash && (
+                        <span className="hash-badge" style={{ marginTop: 2 }}>
+                          {item.content_hash.slice(0, 8)}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                    Updated {new Date(item.updated_at || item.created_at).toLocaleDateString()}
-                  </div>
-                </div>
-              </div>
 
-              <div style={{ width: '120px', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                {item.type === 'file' ? formatBytes(item.size) : 'Folder'}
-              </div>
-
-              {item.type === 'file' && (
-                <div style={{ width: '140px' }}>
-                  <span className="hash-badge" title="File Version">
-                    v{item.version_number || 1}
+                  {/* Size */}
+                  <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                    {item.type === 'file' ? formatBytes(item.size) : '—'}
                   </span>
-                </div>
-              )}
 
-              <div style={{ display: 'flex', gap: '8px' }} onClick={(e) => e.stopPropagation()}>
-                {item.type === 'file' && (
-                  <>
-                    <button className="btn btn-secondary" style={{ padding: '6px 10px' }} title="Download" onClick={() => handleDownload(item)}>
-                      <Download size={15} />
-                    </button>
-                    <button className="btn btn-secondary" style={{ padding: '6px 10px' }} title="Revisions" onClick={() => setVersionModalFile(item)}>
-                      <History size={15} />
-                    </button>
-                  </>
-                )}
-                <button className="btn btn-secondary" style={{ padding: '6px 10px' }} title="Rename" onClick={() => handleRename(item)}>
-                  <Edit2 size={15} />
-                </button>
-                <button className="btn btn-secondary" style={{ padding: '6px 10px' }} title="Move" onClick={() => handleMoveClick(item)}>
-                  <Move size={15} />
-                </button>
-                <button className="btn btn-secondary" style={{ padding: '6px 10px', color: 'var(--accent-rose)' }} title="Trash" onClick={() => handleDelete(item)}>
-                  <Trash2 size={15} />
-                </button>
-              </div>
-            </div>
-          ))}
+                  {/* Type */}
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>
+                    {item.type === 'folder' ? 'Folder' : (ext || 'File')}
+                  </span>
+
+                  {/* Modified */}
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    {formatDate(item.updated_at || item.created_at)}
+                  </span>
+
+                  {/* Actions */}
+                  <ActionButtons item={item} />
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
-      {/* Revisions Modal */}
+      {/* Version History Modal */}
       {versionModalFile && (
         <VersionHistoryModal
           file={versionModalFile}
