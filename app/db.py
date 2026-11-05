@@ -59,6 +59,13 @@ def init_db():
                 conn.execute("ALTER TABLE file ADD COLUMN error_message TEXT")
             if 'is_active' not in existing_cols:
                 conn.execute("ALTER TABLE file ADD COLUMN is_active INTEGER DEFAULT 1")
+            # Bidirectional sync additions (migration v2 — non-destructive)
+            if 'cloud_folder_id' not in existing_cols:
+                conn.execute("ALTER TABLE file ADD COLUMN cloud_folder_id TEXT")
+            if 'cloud_path' not in existing_cols:
+                conn.execute("ALTER TABLE file ADD COLUMN cloud_path TEXT")
+            if 'last_seen_remote_at' not in existing_cols:
+                conn.execute("ALTER TABLE file ADD COLUMN last_seen_remote_at TEXT")
             conn.commit()
     except Exception as e:
         logger.error(f"Failed to initialize SQLite database: {e}")

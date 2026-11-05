@@ -63,16 +63,32 @@ class DebouncedHandler(FileSystemEventHandler):
 
     def on_created(self, event):
         if not event.is_directory:
+            abs_path = os.path.abspath(event.src_path)
             with ignored_paths_lock:
-                if os.path.abspath(event.src_path) in ignored_paths:
+                if abs_path in ignored_paths:
                     return
+            # Also suppress events from agent-generated writes (reconciler downloads)
+            try:
+                from reconciler import is_agent_writing
+                if is_agent_writing(abs_path):
+                    return
+            except ImportError:
+                pass
             self._schedule(event.src_path, "changed")
 
     def on_modified(self, event):
         if not event.is_directory:
+            abs_path = os.path.abspath(event.src_path)
             with ignored_paths_lock:
-                if os.path.abspath(event.src_path) in ignored_paths:
+                if abs_path in ignored_paths:
                     return
+            # Also suppress events from agent-generated writes (reconciler downloads)
+            try:
+                from reconciler import is_agent_writing
+                if is_agent_writing(abs_path):
+                    return
+            except ImportError:
+                pass
             with self._lock:
                 # If it's the first event for this path, trigger the editing callback to acquire locks
                 if event.src_path not in self._pending and self.on_start_editing:

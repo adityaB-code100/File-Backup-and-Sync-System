@@ -168,7 +168,7 @@ class PasswordResetRequestView(APIView):
                     f"If you did not request this, please disregard this message."
                 )
                 from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@vaultcloud.local')
-                send_mail(subject, message, from_email, [email], fail_silently=True)
+                send_mail(subject, message, from_email, [email], fail_silently=False)
             except Exception as e:
                 logger.warning(f"Failed to dispatch password reset email: {e}")
 

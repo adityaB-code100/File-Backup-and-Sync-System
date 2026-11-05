@@ -22,7 +22,7 @@ class ActiveSyncContext:
 
 import db
 from drive_client import (
-    hash_file, upload_file, download_file, get_cloud_md5, 
+    hash_file, upload_file, download_file, get_cloud_md5,
     get_or_create_drive_folder, acquire_lock, release_lock, is_file_stable
 )
 from watcher import IgnorePathContext
@@ -302,112 +302,37 @@ def reconcile_conflict(auth, full_local_path: str, cloud_id: str, watched_dir: s
     logger.warning(f"[sync] Conflict on {rel_path} — created conflicted copy and downloaded cloud version {new_version}.")
 
 def poll_remote_changes(auth, watched_dir: str):
-    """Periodic background polling to detect cloud-side drift."""
+    """
+    Periodic background reconciliation — delegates to the new bidirectional
+    reconciliation engine in reconciler.py.
+
+    This replaces the previous implementation that:
+      (a) only polled files already in SQLite (BUG-01), and
+      (b) used get_cloud_updated_path() producing "(cloud updated)" duplicates (BUG-02).
+
+    The new engine:
+      - Fetches the COMPLETE remote file tree.
+      - Discovers files created on the web dashboard or other devices (fixes BUG-01).
+      - Atomically replaces existing local files in-place (fixes BUG-02).
+      - Uses IgnorePathContext to suppress watcher loops on agent-generated writes.
+    """
     verify_account_isolation(auth)
-    records = db.all_records()
-    for record in records:
-        rel_path = record.get("path")
-        cloud_id = record.get("cloud_id")
-        if not rel_path or not cloud_id:
-            continue
-            
-        with active_syncs_lock:
-            if rel_path in active_syncs:
-                continue
 
-        # Re-fetch latest record to prevent stale snapshot from all_records()
-        latest_record = db.get_record(rel_path)
-        if not latest_record:
-            continue
-            
-        last_synced_local = latest_record.get("last_synced_hash")
-        last_synced_cloud = latest_record.get("last_synced_cloud_md5", last_synced_local)
+    # Import here to avoid circular import at module load time
+    import drive_client as _dc
+    from reconciler import run_reconciliation_cycle
 
-        full_local_path = os.path.join(watched_dir, rel_path)
+    device_id = db.get_device_id()
 
-        try:
-            cloud_md5 = get_cloud_md5(auth, cloud_id)
-        except HTTPError as e:
-            if e.response.status_code == 404:
-                logger.warning(f"[sync] File {rel_path} not found on cloud. (Deleted remotely?)")
-            else:
-                logger.warning(f"[sync] Failed to fetch remote metadata for {rel_path}: {e}")
-            continue
-        except Exception as e:
-            logger.warning(f"[sync] Failed to fetch remote metadata for {rel_path}: {e}")
-            continue
-
-        if not cloud_md5:
-            continue
-
-        local_exists = os.path.exists(full_local_path)
-        current_local_md5 = hash_file(full_local_path) if local_exists else None
-
-        local_changed = local_exists and (current_local_md5 != last_synced_local)
-        cloud_changed = cloud_md5 != last_synced_cloud
-
-        if cloud_changed and not local_changed:
-            target_download_path = get_cloud_updated_path(full_local_path)
-            logger.info(f"[sync] Cloud change detected for {rel_path}. Safely downloading to '{target_download_path}' without overwriting local file...")
-            
-            temp_dl = f"{target_download_path}.tmp.{uuid.uuid4().hex[:6]}"
-            download_success = False
-            
-            with IgnorePathContext(target_download_path), IgnorePathContext(temp_dl):
-                try:
-                    download_file(auth, cloud_id, temp_dl)
-                    dl_hash = hash_file(temp_dl)
-                    if dl_hash != cloud_md5:
-                        logger.error(f"[sync] Downloaded file hash mismatch for {rel_path} (got {dl_hash}, expected {cloud_md5})")
-                        if os.path.exists(temp_dl):
-                            os.remove(temp_dl)
-                        continue
-                    
-                    if os.path.exists(target_download_path):
-                        os.remove(target_download_path)
-                    os.replace(temp_dl, target_download_path)
-                    download_success = True
-                except Exception as e:
-                    logger.error(f"[sync] Interrupted or failed download for {rel_path}: {e}")
-                    if os.path.exists(temp_dl):
-                        os.remove(temp_dl)
-                    continue
-
-            if not download_success:
-                continue
-
-            base_api = getattr(auth, 'backend_url', 'http://localhost:8000/api').rstrip('/')
-            resp = requests.get(f"{base_api}/files/{cloud_id}/", headers=auth.get_auth_header())
-            resp.raise_for_status()
-            meta = resp.json()
-            new_version = meta.get("version_number", 1)
-
-            # Update original record with new cloud hash & version to prevent re-download loop
-            db.upsert_record(
-                rel_path,
-                local_hash=current_local_md5,
-                cloud_id=cloud_id,
-                last_synced_hash=current_local_md5,
-                last_synced_cloud_md5=cloud_md5,
-                cloud_version=new_version
-            )
-
-            # Track the cloud updated copy in SQLite if created alongside original
-            if target_download_path != full_local_path:
-                updated_rel = get_rel_path(target_download_path, watched_dir)
-                dl_hash = hash_file(target_download_path)
-                db.upsert_record(
-                    updated_rel,
-                    local_hash=dl_hash,
-                    cloud_id=cloud_id,
-                    last_synced_hash=dl_hash,
-                    last_synced_cloud_md5=cloud_md5,
-                    cloud_version=new_version
-                )
-            logger.info(f"[sync] Successfully completed non-destructive cloud update for {rel_path} (Version: {new_version})")
-        elif cloud_changed and local_changed:
-            logger.warning(f"[sync] Both local and cloud changed for {rel_path}. Reconciling conflict...")
-            reconcile_conflict(auth, full_local_path, cloud_id, watched_dir)
+    run_reconciliation_cycle(
+        auth=auth,
+        watched_dir=watched_dir,
+        device_id=device_id,
+        db_module=db,
+        drive_client_module=_dc,
+        watcher_ignore=IgnorePathContext,
+        is_startup=False,
+    )
 
 def clean_orphaned_records(watched_dir: str):
     """Diffs SQLite records against current disk files to clean up orphaned records.

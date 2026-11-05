@@ -15,6 +15,9 @@ import db
 from auth import get_drive_service
 from sync_engine import handle_local_change, poll_remote_changes, clean_orphaned_records, acquire_lock_for_path
 from watcher import start_watcher
+import drive_client
+from reconciler import run_reconciliation_cycle
+from watcher import IgnorePathContext
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,15 +26,33 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def startup_reconciliation(auth, device_id: str, watched_dir: str):
-    """Walk the folder once to process local changes, clean up orphaned DB records,
-    and trigger initial remote cloud check."""
-    logger.info("→ startup reconciliation")
-    logger.info("Starting startup reconciliation...")
+    """
+    Run a full bidirectional reconciliation on startup.
+    Discovers remote files, local files, and synchronises all three-way state.
+    Replaces the previous single-direction local-walk-only approach.
+    """
+    logger.info("→ startup reconciliation (bidirectional)")
     os.makedirs(watched_dir, exist_ok=True)
-    for root, _, files in os.walk(watched_dir):
-        for name in files:
-            path = os.path.join(root, name)
-            handle_local_change(auth, path, watched_dir, device_id)
+
+    result = run_reconciliation_cycle(
+        auth=auth,
+        watched_dir=watched_dir,
+        device_id=device_id,
+        db_module=db,
+        drive_client_module=drive_client,
+        watcher_ignore=IgnorePathContext,
+        is_startup=True,
+    )
+    if result.get("skipped"):
+        logger.warning("Startup reconciliation was skipped (another cycle running).")
+    else:
+        logger.info(
+            f"Startup reconciliation complete: "
+            f"uploaded={result.get('uploaded',0)}, "
+            f"downloaded={result.get('downloaded',0)}, "
+            f"conflicts={result.get('conflicts',0)}, "
+            f"errors={result.get('upload_errors',0)+result.get('download_errors',0)}"
+        )
 
     clean_orphaned_records(watched_dir)
     logger.info("Startup reconciliation complete.")
