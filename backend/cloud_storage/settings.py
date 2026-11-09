@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 import dotenv
 import mongoengine
@@ -12,9 +13,16 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-default-key-change-me')
 JWT_SIGNING_KEY = os.getenv('JWT_SIGNING_KEY', SECRET_KEY)
 FILE_ENCRYPTION_KEK = os.getenv('FILE_ENCRYPTION_KEK', '')
 
+# Mail & OTP Microservice Settings
+OTP_SERVER_URL = os.getenv('OTP_SERVER_URL', 'http://127.0.0.1:8001').rstrip('/')
+OTP_SERVICE_SECRET = os.getenv('OTP_SERVICE_SECRET', 'vaultcloud-internal-otp-secret-key-32b')
+
 DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 'yes')
+TESTING = 'test' in sys.argv
 
 ALLOWED_HOSTS = [host.strip() for host in os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if host.strip()]
+if 'testserver' not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append('testserver')
 
 INSTALLED_APPS = [
    

@@ -7,6 +7,7 @@ import {
 import api from '../services/api';
 import VersionHistoryModal from './VersionHistoryModal';
 import MoveModal from './MoveModal';
+import { formatDate } from '../utils/dateUtils.js';
 
 // ── File type icon ─────────────────────────────────────────────
 const getFileIcon = (filename, type, size = 28) => {
@@ -33,10 +34,6 @@ const formatBytes = (bytes) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 };
 
-const formatDate = (d) => {
-  if (!d) return '—';
-  return new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-};
 
 // ── Skeleton loader ───────────────────────────────────────────
 const SkeletonRow = () => (

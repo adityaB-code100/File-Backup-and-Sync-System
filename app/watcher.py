@@ -1,8 +1,10 @@
+import hashlib
 import logging
 import queue
 import threading
 import time
 import os
+from typing import Optional
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
@@ -18,6 +20,94 @@ class IgnorePathContext:
     def __exit__(self, exc_type, exc_val, exc_tb):
         with ignored_paths_lock:
             ignored_paths.discard(self.path)
+
+class WriteSuppressionRegistry:
+    """Thread-safe, hash-verified write suppression registry to prevent watcher loops.
+
+    Instead of relying solely on transient context-manager lifecycles or arbitrary sleeps,
+    this registry records the destination path and expected SHA-256 hash of content written
+    by the agent. When an OS watcher event arrives (even if delayed past context exit):
+      1. Check if path has an active suppression entry.
+      2. If found, verify the actual on-disk file content.
+      3. If on-disk hash matches the agent-written hash, suppress the event.
+      4. If on-disk hash does NOT match (e.g. user edited immediately), cancel suppression
+         and allow the event to be processed.
+      5. Expired entries (older than ttl) are automatically purged in bounded memory.
+    """
+    def __init__(self, default_ttl: float = 30.0, max_entries: int = 10000):
+        self._suppressed: dict[str, tuple[str, float]] = {}  # normcase(abspath) -> (sha256_lower, expire_at)
+        self._lock = threading.Lock()
+        self._default_ttl = default_ttl
+        self._max_entries = max_entries
+
+    def record_suppression(self, path: str, expected_sha256: str, ttl: float = None):
+        if not path or not expected_sha256:
+            return
+        norm = os.path.normcase(os.path.abspath(path))
+        ttl_val = ttl if ttl is not None else self._default_ttl
+        now = time.time()
+        with self._lock:
+            self._purge_expired_locked(now)
+            if len(self._suppressed) >= self._max_entries:
+                oldest = min(self._suppressed, key=lambda k: self._suppressed[k][1])
+                self._suppressed.pop(oldest, None)
+            self._suppressed[norm] = (expected_sha256.lower(), now + ttl_val)
+
+    def cancel_suppression(self, path: str):
+        if not path:
+            return
+        norm = os.path.normcase(os.path.abspath(path))
+        with self._lock:
+            self._suppressed.pop(norm, None)
+
+    def should_suppress(self, path: str, current_hash: Optional[str] = None) -> bool:
+        if not path:
+            return False
+        norm = os.path.normcase(os.path.abspath(path))
+        now = time.time()
+        with self._lock:
+            self._purge_expired_locked(now)
+            entry = self._suppressed.get(norm)
+            if not entry:
+                return False
+            expected_hash, expire_at = entry
+
+        # Verify disk hash
+        if current_hash is None:
+            current_hash = self._compute_hash(path)
+
+        if current_hash is None:
+            return False
+
+        if current_hash.lower() == expected_hash:
+            # Matches agent content: suppress!
+            return True
+        else:
+            # Content changed: user edit! Cancel suppression.
+            self.cancel_suppression(path)
+            return False
+
+    def clear(self):
+        with self._lock:
+            self._suppressed.clear()
+
+    def _purge_expired_locked(self, now: float):
+        expired = [k for k, (_, exp) in self._suppressed.items() if now > exp]
+        for k in expired:
+            self._suppressed.pop(k, None)
+
+    @staticmethod
+    def _compute_hash(path: str) -> Optional[str]:
+        try:
+            h = hashlib.sha256()
+            with open(path, "rb") as f:
+                for chunk in iter(lambda: f.read(65536), b""):
+                    h.update(chunk)
+            return h.hexdigest().lower()
+        except Exception:
+            return None
+
+suppression_registry = WriteSuppressionRegistry()
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +164,8 @@ class DebouncedHandler(FileSystemEventHandler):
                     return
             except ImportError:
                 pass
+            if suppression_registry.should_suppress(abs_path):
+                return
             self._schedule(event.src_path, "changed")
 
     def on_modified(self, event):
@@ -89,6 +181,8 @@ class DebouncedHandler(FileSystemEventHandler):
                     return
             except ImportError:
                 pass
+            if suppression_registry.should_suppress(abs_path):
+                return
             with self._lock:
                 # If it's the first event for this path, trigger the editing callback to acquire locks
                 if event.src_path not in self._pending and self.on_start_editing:
@@ -190,6 +284,8 @@ class IndividualFileHandler(FileSystemEventHandler):
             with ignored_paths_lock:
                 if os.path.abspath(canonical) in ignored_paths:
                     return
+            if suppression_registry.should_suppress(canonical):
+                return
             self._schedule(canonical, "changed")
 
     def on_modified(self, event):
@@ -200,6 +296,8 @@ class IndividualFileHandler(FileSystemEventHandler):
             with ignored_paths_lock:
                 if os.path.abspath(canonical) in ignored_paths:
                     return
+            if suppression_registry.should_suppress(canonical):
+                return
             with self._lock:
                 if canonical not in self._pending and self.on_start_editing:
                     try:

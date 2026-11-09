@@ -24,6 +24,69 @@ LEGACY_ROOT_TOKEN_PATH = os.path.join(os.path.dirname(APP_DIR), "token.json")
 LEGACY_ROOT_CREDS_PATH = os.path.join(os.path.dirname(APP_DIR), "credentials.json")
 
 BACKEND_URL = os.getenv("VAULTCLOUD_BACKEND_URL", "http://localhost:8000/api")
+VAULTCLOUD_WEB_URL = os.getenv("VAULTCLOUD_WEB_URL", "http://localhost:5173")
+
+
+def get_forgot_password_url(base_url: str | None = None) -> str:
+    """
+    Validates and formats the Forgot Password redirect URL.
+    - Strips trailing slashes safely.
+    - Appends /forgot-password exactly once.
+    - Validates scheme (http/https) and host.
+    - Strips userinfo/credentials if present.
+    """
+    raw_url = base_url if base_url is not None else os.getenv("VAULTCLOUD_WEB_URL", VAULTCLOUD_WEB_URL)
+    if not raw_url or not isinstance(raw_url, str) or not raw_url.strip():
+        raise ValueError("VAULTCLOUD_WEB_URL is not configured or empty.")
+
+    from urllib.parse import urlparse
+    cleaned = raw_url.strip()
+    parsed = urlparse(cleaned)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError(f"Invalid VAULTCLOUD_WEB_URL: '{raw_url}'. Must begin with http:// or https:// and include a valid host.")
+
+    path = parsed.path.rstrip("/")
+    if path.endswith("/forgot-password"):
+        target_path = path
+    else:
+        target_path = f"{path}/forgot-password"
+
+    netloc = parsed.hostname
+    if parsed.port:
+        netloc = f"{netloc}:{parsed.port}"
+
+    return f"{parsed.scheme}://{netloc}{target_path}"
+
+
+def open_forgot_password(base_url: str | None = None, on_error=None) -> bool:
+    """
+    Opens the system browser to the Forgot Password URL in a non-blocking thread.
+    Returns True if browser launch was dispatched, False on validation/launch error.
+    """
+    import webbrowser
+    import threading
+
+    try:
+        url = get_forgot_password_url(base_url)
+    except Exception as e:
+        logger.error(f"Failed to resolve Forgot Password URL: {e}")
+        if on_error:
+            on_error(str(e))
+        return False
+
+    def _open():
+        try:
+            logger.info(f"Opening browser for password reset: {url}")
+            success = webbrowser.open(url, new=2)
+            if not success:
+                logger.warning(f"webbrowser.open returned False for URL: {url}")
+        except Exception as err:
+            logger.error(f"Error opening browser: {err}")
+            if on_error:
+                on_error(f"Could not open browser: {err}")
+
+    threading.Thread(target=_open, daemon=True, name="open_forgot_password_browser").start()
+    return True
 
 def _safe_extract_account_info(token_path: str) -> dict | None:
     """Reads unverified token payload to extract account email and user_id without exposing secrets."""

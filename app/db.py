@@ -66,6 +66,11 @@ def init_db():
                 conn.execute("ALTER TABLE file ADD COLUMN cloud_path TEXT")
             if 'last_seen_remote_at' not in existing_cols:
                 conn.execute("ALTER TABLE file ADD COLUMN last_seen_remote_at TEXT")
+            # Phase 2 additions (migration v3 — non-destructive)
+            if 'is_tombstone' not in existing_cols:
+                conn.execute("ALTER TABLE file ADD COLUMN is_tombstone INTEGER DEFAULT 0")
+            if 'conflict_original_path' not in existing_cols:
+                conn.execute("ALTER TABLE file ADD COLUMN conflict_original_path TEXT")
             conn.commit()
     except Exception as e:
         logger.error(f"Failed to initialize SQLite database: {e}")
@@ -123,7 +128,8 @@ def upsert_record(path: str, local_hash: str = None, cloud_id: str = None,
                   cloud_version: int = None, user_id: str = None,
                   sync_mode: str = None, abs_path: str = None,
                   status: str = None, last_sync_time: str = None,
-                  error_message: str = None, is_active: int = None):
+                  error_message: str = None, is_active: int = None,
+                  is_tombstone: int = None, conflict_original_path: str = None):
     rel_path = normalize_path(path)
     updated_at = datetime.now(timezone.utc).isoformat()
     try:
@@ -181,6 +187,12 @@ def upsert_record(path: str, local_hash: str = None, cloud_id: str = None,
                 if is_active is not None:
                     update_fields.append("is_active = ?")
                     params.append(is_active)
+                if is_tombstone is not None:
+                    update_fields.append("is_tombstone = ?")
+                    params.append(is_tombstone)
+                if conflict_original_path is not None:
+                    update_fields.append("conflict_original_path = ?")
+                    params.append(conflict_original_path)
                 params.append(target_path)
                 
                 query = f"UPDATE file SET {', '.join(update_fields)} WHERE path = ?"
@@ -190,15 +202,18 @@ def upsert_record(path: str, local_hash: str = None, cloud_id: str = None,
                     INSERT INTO file (
                         path, local_hash, cloud_id, last_synced_hash,
                         last_synced_cloud_md5, cloud_version, updated_at, user_id,
-                        sync_mode, abs_path, status, last_sync_time, error_message, is_active
+                        sync_mode, abs_path, status, last_sync_time, error_message, is_active,
+                        is_tombstone, conflict_original_path
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     rel_path, local_hash, cloud_id, last_synced_hash,
                     last_synced_cloud_md5, cloud_version or 0, updated_at, user_id,
                     sync_mode or 'folder', abs_path or os.path.abspath(path),
                     status or 'Synced', last_sync_time or updated_at, error_message or '',
-                    1 if is_active is None else is_active
+                    1 if is_active is None else is_active,
+                    0 if is_tombstone is None else is_tombstone,
+                    conflict_original_path
                 ))
             conn.commit()
     except Exception as e:
@@ -265,6 +280,21 @@ def set_file_status(path: str, status: str, error_message: str = "", last_sync_t
             conn.commit()
     except Exception as e:
         logger.error(f"Error setting file status for '{rel_path}': {e}")
+
+def set_tombstone(path: str, is_tombstone: int = 1, error_message: str = "Cloud copy deleted; local copy preserved as tombstone"):
+    """Marks a file as a tombstone in SQLite to prevent false re-uploads after cloud deletion."""
+    rel_path = normalize_path(path)
+    abs_p = os.path.abspath(path)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        with _get_connection() as conn:
+            conn.execute(
+                "UPDATE file SET is_tombstone = ?, status = 'CloudDeleted', error_message = ?, updated_at = ? WHERE path = ? OR abs_path = ?",
+                (is_tombstone, error_message, now_iso, rel_path, abs_p)
+            )
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Error setting tombstone for '{rel_path}': {e}")
 
 def set_file_active(path: str, is_active: int, status: str = None):
     rel_path = normalize_path(path)

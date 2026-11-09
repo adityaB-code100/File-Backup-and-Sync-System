@@ -12,6 +12,7 @@ python-dateutil>=2.8.2
 gunicorn>=21.2.0
 pytest>=8.0.0
 pytest-django>=4.8.0
+phonenumbers>=9.0.0
 
 # Desktop Sync Client dependencies
 watchdog>=4.0.0

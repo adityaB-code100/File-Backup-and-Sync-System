@@ -76,6 +76,9 @@ class FileState:
     last_cloud_version: int = 0
     sync_mode: str = "folder"
     abs_path: Optional[str] = None      # only set for individually tracked files
+    status: Optional[str] = None        # Synced, Conflict, CloudDeleted, LocalDeleted, etc.
+    is_tombstone: int = 0               # 1 if cloud counterpart was deleted
+    conflict_original_path: Optional[str] = None
 
     # Cloud state (from API response)
     cloud_exists: bool = False
@@ -154,12 +157,9 @@ def _build_folder_path_map(auth) -> dict[str, str]:
             resp = _api(auth, "GET", "/folders/", params={"limit": limit, "offset": offset})
             resp.raise_for_status()
             data = resp.json()
-        except HTTPError as exc:
-            logger.warning(f"[recon] Could not fetch folder list page (offset={offset}): {exc}")
-            break
         except Exception as exc:
-            logger.warning(f"[recon] Network error fetching folders: {exc}")
-            break
+            logger.error(f"[recon] Network or HTTP error fetching folders (offset={offset}): {exc}")
+            raise RuntimeError(f"Failed to fetch complete folder tree: {exc}") from exc
 
         # /api/folders/ returns {"results": [...]} (no count/pagination)
         results = data.get("results", data if isinstance(data, list) else [])
@@ -202,48 +202,50 @@ def fetch_remote_file_tree(auth) -> list[dict]:
     Returns a flat list of ALL active (non-deleted) file metadata dicts for
     the authenticated user, across all folders, handling pagination.
 
+    Queries the root folder ('root') and all subfolders discovered via
+    _build_folder_path_map so that files inside nested folders are properly discovered.
+
     Each item is the dict returned by /api/files/<id>/ — includes:
         id, name, parent_id, content_hash, version_number, deleted, ...
     """
     all_files: list[dict] = []
     folder_path_map = _build_folder_path_map(auth)
 
-    offset = 0
-    limit = 200
+    # Query root plus all discovered subfolder IDs
+    folder_targets = [("root", "")] + list(folder_path_map.items())
 
-    while True:
-        try:
-            resp = _api(
-                auth, "GET", "/files/",
-                params={"limit": limit, "offset": offset}
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        except HTTPError as exc:
-            logger.warning(f"[recon] Could not fetch file list (offset={offset}): {exc}")
-            break
-        except Exception as exc:
-            logger.warning(f"[recon] Network error fetching files: {exc}")
-            break
+    for parent_target, folder_rel in folder_targets:
+        offset = 0
+        limit = 200
 
-        results = data.get("results", [])
-        if not results:
-            break
+        while True:
+            try:
+                resp = _api(
+                    auth, "GET", "/files/",
+                    params={"parent_id": parent_target, "limit": limit, "offset": offset}
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            except Exception as exc:
+                logger.error(f"[recon] Network or HTTP error fetching files for folder '{folder_rel}' (parent={parent_target}, offset={offset}): {exc}")
+                raise RuntimeError(f"Failed to fetch complete remote file tree: {exc}") from exc
 
-        for item in results:
-            if item.get("type") != "file" or item.get("deleted"):
-                continue
-            pid = item.get("parent_id")
-            folder_rel = folder_path_map.get(pid, "") if pid else ""
-            item["_folder_rel"] = folder_rel  # e.g. "Documents/Projects"
-            all_files.append(item)
+            results = data.get("results", [])
+            if not results:
+                break
 
-        total = data.get("count", len(all_files))
-        if offset + limit >= total:
-            break
-        offset += limit
+            for item in results:
+                if item.get("type") != "file" or item.get("deleted"):
+                    continue
+                item["_folder_rel"] = folder_rel  # e.g. "Documents/Projects"
+                all_files.append(item)
 
-    logger.debug(f"[recon] Fetched {len(all_files)} remote files ({len(folder_path_map)} folders)")
+            total = data.get("count", len(results))
+            if offset + limit >= total or len(results) < limit:
+                break
+            offset += limit
+
+    logger.debug(f"[recon] Fetched {len(all_files)} remote files across {len(folder_targets)} folder(s)")
     return all_files
 
 
@@ -306,6 +308,21 @@ def classify_file_state(state: FileState) -> str:
     last_local   = state.last_synced_hash
     last_cloud   = state.last_synced_cloud_hash
 
+    # Conflict copy lifecycle (local-only conflict copies from prior conflict events)
+    if state.status == "Conflict" and state.cloud_id is None:
+        if local_exists:
+            return ACTION_NOOP
+        return ACTION_BOTH_DELETED
+
+    # Tombstone handling (persistent cloud deletion marker — prevents false re-uploads)
+    if (state.status == "CloudDeleted" or state.is_tombstone) and not cloud_exists:
+        if local_exists:
+            # Preserved local copy: as long as local content matches last synced, NO-OP
+            if not state.last_synced_hash or local_hash == state.last_synced_hash:
+                return ACTION_NOOP
+            return ACTION_NOOP
+        return ACTION_BOTH_DELETED
+
     # Both gone
     if not local_exists and not cloud_exists:
         return ACTION_BOTH_DELETED
@@ -320,8 +337,10 @@ def classify_file_state(state: FileState) -> str:
 
     # Only local (cloud gone or never uploaded)
     if local_exists and not cloud_exists:
-        if state.cloud_id and last_cloud:
+        if state.cloud_id and (last_cloud or state.status == "CloudDeleted" or state.is_tombstone):
             # We previously had this; cloud was deleted or 404
+            if state.status == "CloudDeleted" or state.is_tombstone:
+                return ACTION_NOOP
             return ACTION_CLOUD_DELETED
         # Never uploaded
         return ACTION_UPLOAD_NEW
@@ -333,9 +352,11 @@ def classify_file_state(state: FileState) -> str:
     # First-time sync: neither side has a last-synced record
     if not last_local and not last_cloud:
         if local_hash == cloud_hash:
-            return ACTION_NOOP   # identical content, just adopt
-        # Different content on first encounter: treat cloud as authoritative
-        return ACTION_DOWNLOAD_CHANGED
+            return ACTION_NOOP   # identical content, adopt
+        # Safe first-time sync policy: NEVER silently overwrite local content!
+        # Both versions preserved: local copy saved as conflict copy, cloud version downloaded in-place
+        state.conflict_reason = "first_sync_divergence"
+        return ACTION_CONFLICT
 
     if not local_changed and not cloud_changed:
         return ACTION_NOOP
@@ -416,6 +437,9 @@ def build_reconciliation_plan(
             last_cloud_version=rec.get("cloud_version", 0),
             sync_mode=rec.get("sync_mode", "folder"),
             abs_path=rec.get("abs_path"),
+            status=rec.get("status"),
+            is_tombstone=rec.get("is_tombstone", 0),
+            conflict_original_path=rec.get("conflict_original_path"),
             cloud_exists=remote_file is not None,
             cloud_hash=remote_file.get("content_hash") if remote_file else None,
             cloud_version=remote_file.get("version_number", 0) if remote_file else 0,
@@ -595,15 +619,20 @@ def execute_plan(
         except Exception as exc:
             logger.warning(f"[recon][{cid}] Could not update status for local deletion: {exc}")
 
-    # --- Cloud deletions (note only; local NOT auto-deleted) ---
+    # --- Cloud deletions (tombstone recorded; local copy preserved; no false re-upload) ---
     for state in plan.cloud_deletions:
         logger.info(f"[recon][{cid}] Cloud file not found for '{state.rel_path}' "
-                    f"(local copy preserved; removing sync record).")
+                    f"(local copy preserved; recording persistent CloudDeleted tombstone).")
         try:
-            db_module.delete_record(state.rel_path)
+            if hasattr(db_module, "set_tombstone"):
+                db_module.set_tombstone(state.rel_path, is_tombstone=1,
+                                        error_message="Cloud copy deleted; local copy preserved as tombstone")
+            else:
+                db_module.set_file_status(state.rel_path, "CloudDeleted",
+                                          "Cloud copy deleted; local copy preserved as tombstone")
             results["cloud_deletions_noted"] += 1
         except Exception as exc:
-            logger.warning(f"[recon][{cid}] Could not remove stale sync record: {exc}")
+            logger.warning(f"[recon][{cid}] Could not record tombstone for '{state.rel_path}': {exc}")
 
     logger.info(
         f"[recon][{cid}] Execution complete: "
@@ -669,6 +698,7 @@ def _execute_upload(
         status="Synced",
         last_sync_time=now_iso,
         error_message="",
+        is_tombstone=0,
     )
     logger.info(f"[recon][{cid}] Uploaded '{rel}' → cloud_id={new_id} version={new_ver}")
 
@@ -707,8 +737,15 @@ def _execute_download(
             os.replace(temp_path, abs_dest)
             logger.debug(f"[recon][{cid}] Atomically replaced: {abs_dest}")
 
+            # Register with durable hash-based suppression registry
+            try:
+                from watcher import suppression_registry
+                suppression_registry.record_suppression(abs_dest, downloaded_hash, ttl=30.0)
+            except ImportError:
+                pass
+
             # Allow watcher event to settle before updating SQLite
-            time.sleep(0.1)
+            time.sleep(0.05)
 
     except Exception:
         # Clean up temp file on failure; leave original intact
@@ -733,6 +770,7 @@ def _execute_download(
         status="Synced",
         last_sync_time=now_iso,
         error_message="",
+        is_tombstone=0,
     )
     logger.info(f"[recon][{cid}] Downloaded '{rel}' (version={state.cloud_version}, hash={final_hash[:16]}…)")
 
@@ -767,6 +805,11 @@ def _execute_conflict(
         with AgentWriteContext(conflict_path):
             shutil.copy2(full_path, conflict_path)
         logger.info(f"[recon][{cid}] Conflict copy created: {conflict_path}")
+        try:
+            from watcher import suppression_registry
+            suppression_registry.record_suppression(conflict_path, _hash_file(conflict_path), ttl=30.0)
+        except ImportError:
+            pass
     except Exception as exc:
         logger.error(f"[recon][{cid}] Could not create conflict copy for '{rel}': {exc}")
         raise
@@ -795,6 +838,8 @@ def _execute_conflict(
         status="Conflict",
         last_sync_time=now_iso,
         error_message=f"Conflict copy of '{rel}' — local version at time of conflict",
+        is_tombstone=0,
+        conflict_original_path=rel,
     )
     db_module.set_file_status(rel, "Synced", "")
     logger.warning(f"[recon][{cid}] Conflict resolved for '{rel}': cloud version downloaded, local preserved at '{conflict_rel}'")

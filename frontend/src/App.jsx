@@ -11,6 +11,7 @@ import RegisterPage from './components/RegisterPage';
 import ForgotPasswordPage from './components/ForgotPasswordPage';
 import DashboardStats from './components/DashboardStats';
 import RightSidebar from './components/RightSidebar';
+import ProfilePage from './components/ProfilePage';
 import api from './services/api';
 
 // ── Loading Screen ─────────────────────────────────────────────
@@ -156,51 +157,87 @@ const DashboardLayout = () => {
           )}
 
           {/* Main content + right panel */}
-          <div className="content-layout">
-            <div className="content-main">
-              {/* Section header */}
-              <div className="section-divider" style={{ marginBottom: 16 }}>
+          {activeTab === 'profile' ? (
+            <div style={{ padding: '8px 0' }}>
+              <div className="section-divider" style={{ marginBottom: 20 }}>
                 <h3 style={{ fontSize: '1rem', fontWeight: 800, letterSpacing: '-0.01em' }}>
-                  {activeTab === 'drive' ? '📁 My Drive' : '🗑️ Trash / Recycled'}
+                  👤 User Profile & Security
                 </h3>
               </div>
-
-              {activeTab === 'drive' ? (
-                <FileBrowser
-                  key={refreshTrigger}
-                  searchQuery={searchQuery}
-                  viewMode={viewMode}
-                  onRefreshStorage={() => setRefreshTrigger((prev) => prev + 1)}
-                  onFolderChange={setCurrentFolderId}
-                />
-              ) : (
-                <TrashView onRefreshStorage={() => setRefreshTrigger((prev) => prev + 1)} />
-              )}
+              <ProfilePage />
             </div>
+          ) : (
+            <div className="content-layout">
+              <div className="content-main">
+                {/* Section header */}
+                <div className="section-divider" style={{ marginBottom: 16 }}>
+                  <h3 style={{ fontSize: '1rem', fontWeight: 800, letterSpacing: '-0.01em' }}>
+                    {activeTab === 'drive' ? '📁 My Drive' : '🗑️ Trash / Recycled'}
+                  </h3>
+                </div>
 
-            {/* Right Sidebar */}
-            <RightSidebar refreshKey={refreshTrigger} />
-          </div>
+                {activeTab === 'drive' ? (
+                  <FileBrowser
+                    key={refreshTrigger}
+                    searchQuery={searchQuery}
+                    viewMode={viewMode}
+                    onRefreshStorage={() => setRefreshTrigger((prev) => prev + 1)}
+                    onFolderChange={setCurrentFolderId}
+                  />
+                ) : (
+                  <TrashView onRefreshStorage={() => setRefreshTrigger((prev) => prev + 1)} />
+                )}
+              </div>
+
+              {/* Right Sidebar */}
+              <RightSidebar refreshKey={refreshTrigger} />
+            </div>
+          )}
         </main>
       </div>
     </div>
   );
 };
 
-// ── App Router (simple state-based) ───────────────────────────
+const getPageFromPath = () => {
+  if (typeof window === 'undefined') return 'landing';
+  const path = window.location.pathname.toLowerCase().replace(/\/+$/, '');
+  if (path === '/forgot-password') return 'forgot-password';
+  if (path === '/login') return 'login';
+  if (path === '/register') return 'register';
+  return 'landing';
+};
+
+// ── App Router (supports direct navigation, refresh, and HTML5 history) ──
 const AppRouter = () => {
   const { user, loading } = useAuth();
-  const [page, setPage] = useState('landing'); // 'landing' | 'login' | 'register' | 'forgot-password'
+  const [page, setPage] = useState(getPageFromPath);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setPage(getPageFromPath());
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const navigate = (nextPage) => {
+    setPage(nextPage);
+    const targetPath = nextPage === 'landing' ? '/' : `/${nextPage}`;
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState({}, '', targetPath);
+    }
+  };
 
   // When user is authenticated, always show dashboard
   if (loading) return <LoadingScreen />;
   if (user) return <DashboardLayout />;
 
   // Public routes
-  if (page === 'login') return <LoginPage onNavigate={setPage} />;
-  if (page === 'register') return <RegisterPage onNavigate={setPage} />;
-  if (page === 'forgot-password') return <ForgotPasswordPage onNavigate={setPage} />;
-  return <LandingPage onNavigate={setPage} />;
+  if (page === 'login') return <LoginPage onNavigate={navigate} />;
+  if (page === 'register') return <RegisterPage onNavigate={navigate} />;
+  if (page === 'forgot-password') return <ForgotPasswordPage onNavigate={navigate} />;
+  return <LandingPage onNavigate={navigate} />;
 };
 
 // ── Root App ──────────────────────────────────────────────────

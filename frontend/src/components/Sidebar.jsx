@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   Cloud, HardDrive, Trash2, LogOut, ShieldCheck,
-  RefreshCw, Smartphone, Lock, X
+  RefreshCw, Smartphone, Lock, X, User
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
@@ -43,6 +43,7 @@ const Sidebar = ({ activeTab, setActiveTab, mobileOpen, onClose }) => {
   const navItems = [
     { id: 'drive', icon: <HardDrive size={17} />, label: 'My Drive' },
     { id: 'trash', icon: <Trash2 size={17} />, label: 'Trash / Recycled' },
+    { id: 'profile', icon: <User size={17} />, label: 'My Profile' },
   ];
 
   const infoItems = [
@@ -132,14 +133,19 @@ const Sidebar = ({ activeTab, setActiveTab, mobileOpen, onClose }) => {
       </div>
 
       {/* User Footer */}
-      <div className="sidebar-user">
+      <div
+        className="sidebar-user"
+        onClick={() => { setActiveTab('profile'); onClose(); }}
+        style={{ cursor: 'pointer' }}
+        title="View Profile"
+      >
         <div className="sidebar-avatar">{userInitial}</div>
         <div className="sidebar-user-info">
-          <div className="sidebar-user-email" title={user?.email}>{user?.email}</div>
-          <div className="sidebar-user-role">Personal Account</div>
+          <div className="sidebar-user-email" title={user?.email}>{user?.full_name || user?.email}</div>
+          <div className="sidebar-user-role">{user?.is_email_verified ? 'Verified Account' : 'Personal Account'}</div>
         </div>
         <button
-          onClick={logout}
+          onClick={(e) => { e.stopPropagation(); logout(); }}
           title="Sign Out"
           className="btn btn-ghost btn-icon"
           aria-label="Sign out"

@@ -145,13 +145,13 @@ class TestClassifyFileState(unittest.TestCase):
         # Both sides identical on first encounter → no-op (adopt silently)
         self.assertEqual(classify_file_state(s), ACTION_NOOP)
 
-    def test_first_time_different_hash_downloads_cloud(self):
+    def test_first_time_different_hash_is_conflict(self):
         s = self._state(
             local_exists=True, local_hash="localonly", cloud_exists=True, cloud_hash="cloudver",
             last_synced_hash=None, last_synced_cloud_hash=None
         )
-        # Cloud is authoritative on first encounter with different content
-        self.assertEqual(classify_file_state(s), ACTION_DOWNLOAD_CHANGED)
+        # Safe first-time sync policy: different hashes must CONFLICT to preserve both versions
+        self.assertEqual(classify_file_state(s), ACTION_CONFLICT)
 
 
 # ---------------------------------------------------------------------------
@@ -357,7 +357,10 @@ class TestAtomicDownload(unittest.TestCase):
         """Mock drive_client whose download_file writes cloud_content to destination."""
         cloud_hash = _sha256(cloud_content)
         dc = MagicMock()
-        dc.download_file.side_effect = lambda auth, cid, dest: open(dest, "wb").write(cloud_content)
+        def _mock_download(auth, cid, dest):
+            with open(dest, "wb") as f:
+                f.write(cloud_content)
+        dc.download_file.side_effect = _mock_download
         dc.get_or_create_drive_folder.return_value = "root"
         dc.upload_file.return_value = {"id": "new_id", "version_number": 1, "content_hash": cloud_hash}
         dc.acquire_lock.return_value = True
@@ -429,7 +432,10 @@ class TestAtomicDownload(unittest.TestCase):
         _write_file(local_file, original_content)
 
         dc = MagicMock()
-        dc.download_file.side_effect = lambda auth, cid, dest: open(dest, "wb").write(bad_content)
+        def _mock_bad_download(auth, cid, dest):
+            with open(dest, "wb") as f:
+                f.write(bad_content)
+        dc.download_file.side_effect = _mock_bad_download
         auth = self._make_auth()
 
         state = FileState(
@@ -630,7 +636,10 @@ class TestConflictHandling(unittest.TestCase):
         # (simulate an already existing conflict file from an earlier conflict)
 
         dc = MagicMock()
-        dc.download_file.side_effect = lambda auth, cid, dest: open(dest, "wb").write(cloud_content)
+        def _mock_dl1(auth, cid, dest):
+            with open(dest, "wb") as f:
+                f.write(cloud_content)
+        dc.download_file.side_effect = _mock_dl1
         auth = MagicMock()
         auth.get_auth_header.return_value = {"Authorization": "Bearer x"}
         auth.backend_url = "http://localhost:8000/api"
@@ -667,7 +676,10 @@ class TestConflictHandling(unittest.TestCase):
         _write_file(local_file, b"local version")
 
         dc = MagicMock()
-        dc.download_file.side_effect = lambda auth, cid, dest: open(dest, "wb").write(cloud_content)
+        def _mock_dl1(auth, cid, dest):
+            with open(dest, "wb") as f:
+                f.write(cloud_content)
+        dc.download_file.side_effect = _mock_dl1
         auth = MagicMock()
         auth.get_auth_header.return_value = {"Authorization": "Bearer x"}
         auth.backend_url = "http://localhost:8000/api"

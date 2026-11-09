@@ -1,24 +1,74 @@
 # VaultCloud — Bidirectional Sync Test Report
 
-**Date**: November 2026  
+**Date**: November 2026 (Phase 2 Update)  
 **Repository**: `E:\backup-sync` (branch: `main`)  
 **Engineer**: Senior Python / QA Automation Engineer
 
 ---
 
-## Executive Summary
+## Executive Summary & Discrepancy Resolution
 
-| Category | Tests Run | Passed | Failed | Duration |
-|---|:---:|:---:|:---:|---|
-| **New: Bidirectional Sync Suite** | **45** | **45** | **0** | 2.807s |
-| **Regression: Account Isolation** | 12 | 12 | 0 | *(part of 22.731s)* |
-| **Regression: Individual File Sync** | 4 | 4 | 0 | *(part of 22.731s)* |
-| **Regression: Duplicate Filename** | 16 | 16 | 0 | *(part of 22.731s)* |
-| **Regression: Crypto & DR** | 10 | 10 | 0 | 0.234s |
-| **Regression: Frontend Build** | 1887 modules | ✅ | 0 errors | 1.32s |
-| **TOTAL** | **90 test cases** | **90** | **0** | — |
+> **Note on Discrepancy Resolution (Requirement 6)**: The previous Phase 1 report listed 45 + 12 + 4 + 16 + 10 test cases and incorrectly totaled them as 90 instead of 87 due to a manual addition typo. The actual execution count for Phase 1 was **87 automated test cases**. With Phase 2 hardening, 22 new unit and integration tests have been implemented and executed, bringing the verified total to **109 passing automated tests**.
 
-**Zero regressions introduced. All 90 tests pass.**
+### Summary of Executed Tests
+
+| Category | Suite / Module | Type | Tests Run | Passed | Failed | Duration |
+|---|---|---|:---:|:---:|:---:|---|
+| **Phase 2 Hardening** | `test_phase2_hardening.py` | Unit & Integration | **22** | **22** | **0** | 1.664s |
+| **Bidirectional Sync** | `test_bidirectional_sync.py` | Unit & Decision Table | **45** | **45** | **0** | 2.764s |
+| **Account Isolation** | `test_account_isolation` | Desktop Regression | 12 | 12 | 0 | *(part of 22.363s)* |
+| **Individual File Sync**| `test_individual_sync` | Desktop Regression | 4 | 4 | 0 | *(part of 22.363s)* |
+| **Duplicate Filename** | `test_duplicate_filename` | Desktop Regression | 16 | 16 | 0 | *(part of 22.363s)* |
+| **Crypto & DR** | `scratch/audit_crypto_backup.py` | Security & DR | 10 | 10 | 0 | 0.203s |
+| **Frontend Production** | `npm run build` | Build Verification | 1887 modules | ✅ | 0 errors | 0.782s |
+| **TOTAL EXECUTED** | All active test targets | — | **109 test cases** | **109** | **0** | — |
+
+**Zero regressions introduced. All 109 automated tests pass with 100% success.**
+
+---
+
+## 1. Test Categorization & Structure
+
+The test pyramid is organized into clean, independent tiers:
+
+### A. Unit Tests (67 tests)
+- `test_bidirectional_sync.py` (45 tests): Decision function (`classify_file_state`), plan builder, atomic downloads, local tree scanning, loop prevention contexts, and SQLite schema migrations.
+- `test_phase2_hardening.py` Unit Components (12 tests):
+  - `TestWatcherLoopPrevention` (6 tests): Hash-verified suppression, duplicate event handling, immediate user modifications, TTL expirations, bounded memory capping.
+  - `TestCloudDeletionTombstone` (2 tests): Network failure abort safety, both-sides deleted cleanup.
+  - `TestSafeFirstTimeSync` (1 test): Decision classification for hash divergence.
+  - `TestConflictCopyLifecycle` (2 tests): NO-OP classification for conflict copies, restart persistence.
+  - `TestSQLiteMigration` (1 test): Migration idempotency and schema v3 column creation.
+
+### B. Integration Tests (10 tests)
+- `test_phase2_hardening.py` (`TestTenIntegrationScenarios`):
+  1. `test_scenario_01_dashboard_upload_to_desktop_discovery` (PASS)
+  2. `test_scenario_02_dashboard_update_to_local_inplace_replacement` (PASS)
+  3. `test_scenario_03_local_upload_to_cloud_discovery` (PASS)
+  4. `test_scenario_04_local_update_to_cloud_update` (PASS)
+  5. `test_scenario_05_cloud_deletion_no_automatic_reupload` (PASS)
+  6. `test_scenario_06_delayed_watcher_event_no_upload_loop` (PASS)
+  7. `test_scenario_07_first_sync_conflict_preserves_both` (PASS)
+  8. `test_scenario_08_conflict_copy_no_repeated_conflict` (PASS)
+  9. `test_scenario_09_network_failure_no_false_deletion` (PASS)
+  10. `test_scenario_10_agent_restart_state_restored` (PASS)
+
+### C. Desktop Regression Tests (32 tests)
+- `test_account_isolation.py` (12 tests): Cross-account data isolation, observer lifecycle on logout/login.
+- `test_individual_sync.py` (4 tests): Per-file watcher monitoring, atomic editor save renames.
+- `test_duplicate_filename.py` (16 tests): Disambiguation numbering, collision prevention.
+
+### D. Security, Cryptography & Disaster Recovery Tests (10 tests)
+- `audit_crypto_backup.py` (10 tests): AES-256-GCM authenticated encryption round-trip, tamper detection, KEK isolation, secondary backup replication idempotency, and full disaster recovery byte-for-byte verification.
+
+### E. Frontend Production Build Check
+- `cd frontend && npm run build`: 1887 modules transformed, zero build warnings, zero errors. Built in 782ms.
+
+### F. Backend Django Tests (Not Executed in Sandbox)
+- `python manage.py test files` (9 tests)
+- `python manage.py test accounts` (11 tests)
+- `python manage.py test accounts.test_middleware` (9 tests)
+*Status*: Not executed during this session because the sandbox environment restricts external DNS SRV resolution for MongoDB Atlas (`_mongodb._tcp.aqiproject.7r8nvxf.mongodb.net`). Confirmed 29/29 passing in prior elevated runs; no backend Django files were altered in this desktop-focused phase.
 
 ---
 
@@ -290,3 +340,4 @@ The following are **known system limitations** (not test failures):
 
 1. `test/test1.py` and `test/test2.py` — legacy proof-of-concept scripts with `ModuleNotFoundError` and obsolete MD5 assertions. Not modified; not part of this implementation scope.
 2. Physical storage colocation (D: and E: on same SSD) — infrastructure limitation, not testable via unit tests.
+

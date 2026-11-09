@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
+import OTPVerificationModal from './OTPVerificationModal';
 
 // ── Validation ─────────────────────────────────────────────────
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -12,6 +13,7 @@ const SPECIAL_REGEX = /[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/;
 
 const getPasswordStrength = (pw) => {
   if (!pw) return { score: 0, label: '', cls: '' };
+  if (pw.length < 8) return { score: 0, label: 'Too short', cls: 'pw-weak', active: 'active-weak' };
   let score = 0;
   if (pw.length >= 8) score++;
   if (/[A-Z]/.test(pw)) score++;
@@ -26,10 +28,10 @@ const getPasswordStrength = (pw) => {
 
 const validateFullName = (val) => {
   const trimmed = val.trim();
-  if (!trimmed) return 'Full name is required.';
+  if (!trimmed) return ''; // Full name is optional
   if (trimmed.length < 2) return 'Name must be at least 2 characters.';
   if (trimmed.length > 50) return 'Name must not exceed 50 characters.';
-  if (!/^[a-zA-Z\s'-]+$/.test(trimmed)) return 'Name contains invalid characters.';
+  if (!/^[a-zA-Z\s'\-\u00C0-\u024F]+$/.test(trimmed)) return 'Name contains invalid characters.';
   return '';
 };
 
@@ -41,10 +43,18 @@ const validateEmail = (val) => {
   return '';
 };
 
-const validatePassword = (val) => {
+const validatePassword = (val, emailVal = '') => {
   if (!val) return 'Password is required.';
   if (val.length < 8) return 'Password must be at least 8 characters.';
   if (val.length > 128) return 'Password must not exceed 128 characters.';
+  if (!val.trim()) return 'Password cannot contain only spaces.';
+  if (emailVal && val.toLowerCase() === emailVal.trim().toLowerCase())
+    return 'Password cannot be the same as your email address.';
+  if (emailVal) {
+    const localPart = emailVal.split('@')[0]?.toLowerCase();
+    if (localPart && localPart.length >= 4 && val.toLowerCase() === localPart)
+      return 'Password cannot be your email username.';
+  }
   if (!/[A-Z]/.test(val)) return 'Password must contain at least one uppercase letter.';
   if (!/[a-z]/.test(val)) return 'Password must contain at least one lowercase letter.';
   if (!/[0-9]/.test(val)) return 'Password must contain at least one number.';
@@ -68,6 +78,8 @@ const RegisterPage = ({ onNavigate }) => {
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState('');
   const [success, setSuccess] = useState('');
+  const [showOTPModal, setShowOTPModal] = useState(false);
+  const [registeredEmail, setRegisteredEmail] = useState('');
 
   // Field errors
   const [nameErr, setNameErr] = useState('');
@@ -91,7 +103,7 @@ const RegisterPage = ({ onNavigate }) => {
 
     const nErr = validateFullName(fullName);
     const eErr = validateEmail(email);
-    const pErr = validatePassword(password);
+    const pErr = validatePassword(password, email);
     const cErr = validateConfirmPw(confirmPw, password);
     const tErr = (!termsAccepted || !privacyAccepted) ? 'You must accept the Terms & Conditions and Privacy Policy.' : '';
 
@@ -105,10 +117,15 @@ const RegisterPage = ({ onNavigate }) => {
 
     setSubmitting(true);
     try {
-      // Note: backend register takes email + password. fullName is extra UI field.
-      // The backend may or may not accept 'name' — we send it but don't fail if ignored.
-      await register(email.trim().toLowerCase(), password);
-      setSuccess('Account created successfully! Redirecting to dashboard...');
+      const cleanEmail = email.trim().toLowerCase();
+      const res = await register(cleanEmail, password, fullName.trim());
+      setRegisteredEmail(cleanEmail);
+      if (res?.requires_verification || !res?.access) {
+        setSuccess('Account created! Please enter the 6-digit verification code sent to your email.');
+        setShowOTPModal(true);
+      } else {
+        setSuccess('Account created successfully! Redirecting to dashboard...');
+      }
     } catch (err) {
       const msg =
         err.response?.data?.error ||
@@ -166,7 +183,7 @@ const RegisterPage = ({ onNavigate }) => {
         <form onSubmit={handleSubmit} noValidate>
           {/* Full Name */}
           <div className="form-group">
-            <label className="form-label" htmlFor="reg-name">Full Name</label>
+            <label className="form-label" htmlFor="reg-name">Full Name <span style={{ fontWeight: 400, color: 'var(--text-dim)', fontSize: '0.8rem' }}>(optional)</span></label>
             <div className="input-wrapper">
               <User size={17} className="input-icon-left" />
               <input
@@ -219,7 +236,7 @@ const RegisterPage = ({ onNavigate }) => {
                 placeholder="••••••••••"
                 value={password}
                 onChange={(e) => { setPassword(e.target.value); if (pwErr) setPwErr(''); }}
-                onBlur={() => setPwErr(validatePassword(password))}
+                onBlur={() => setPwErr(validatePassword(password, email))}
                 maxLength={128}
                 aria-invalid={!!pwErr}
               />
@@ -350,6 +367,19 @@ const RegisterPage = ({ onNavigate }) => {
           AES-256-GCM Encryption · Argon2 Auth
         </div>
       </div>
+
+      {/* OTP Verification Modal */}
+      <OTPVerificationModal
+        isOpen={showOTPModal}
+        onClose={() => setShowOTPModal(false)}
+        recipient={registeredEmail}
+        channel="email"
+        purpose="registration"
+        onSuccess={() => {
+          // AuthContext has now set the user upon successful OTP verification
+          setSuccess('Account activated! Welcome to VaultCloud.');
+        }}
+      />
     </div>
   );
 };

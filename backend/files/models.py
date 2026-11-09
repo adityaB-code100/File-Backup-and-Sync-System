@@ -1,6 +1,7 @@
 import mongoengine as me
-from datetime import datetime
+from datetime import datetime, timezone
 from accounts.models import User
+from cloud_storage.timezone_utils import to_iso_utc
 
 class Folder(me.Document):
     name = me.StringField(required=True)
@@ -21,8 +22,8 @@ class Folder(me.Document):
             "owner": str(self.owner.id) if self.owner else None,
             "parent_id": str(self.parent_folder.id) if self.parent_folder else None,
             "type": "folder",
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.created_at.isoformat() if self.created_at else None,
+            "created_at": to_iso_utc(self.created_at),
+            "updated_at": to_iso_utc(self.created_at),
             "deleted": self.deleted
         }
 
@@ -50,7 +51,7 @@ class FileVersion(me.Document):
             "version_number": self.version_number,
             "content_hash": self.content_hash,
             "size": self.size_bytes,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "created_at": to_iso_utc(self.created_at),
             "uploaded_by": str(self.uploaded_by.id) if self.uploaded_by else None
         }
 
@@ -92,11 +93,11 @@ class File(me.Document):
             "version_number": ver.version_number if ver else 1,
             "content_hash": ver.content_hash if ver else None,
             "size": ver.size_bytes if ver else 0,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "created_at": to_iso_utc(self.created_at),
+            "updated_at": to_iso_utc(self.updated_at),
             "deleted": self.deleted,
             "is_locked": active_lock,
             "lock_owner": str(self.lock_owner.id) if (active_lock and self.lock_owner) else None,
             "lock_device_id": self.lock_device_id if active_lock else None,
-            "lock_expires_at": self.lock_expires_at.isoformat() if (active_lock and self.lock_expires_at) else None
+            "lock_expires_at": to_iso_utc(self.lock_expires_at) if (active_lock and self.lock_expires_at) else None
         }

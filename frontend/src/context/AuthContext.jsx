@@ -33,13 +33,66 @@ export const AuthProvider = ({ children }) => {
     return userData;
   };
 
-  const register = async (email, password) => {
-    const res = await api.post('/auth/register/', { email, password });
+  const register = async (email, password, fullName = '') => {
+    const res = await api.post('/auth/register/', {
+      email,
+      password,
+      full_name: fullName,
+    });
+    // If backend returns tokens directly (legacy or test), set them
+    if (res.data?.access && res.data?.refresh) {
+      localStorage.setItem('access_token', res.data.access);
+      localStorage.setItem('refresh_token', res.data.refresh);
+      setUser(res.data.user);
+    }
+    return res.data;
+  };
+
+  const verifyEmailOTP = async (email, otp, purpose = 'registration') => {
+    const res = await api.post('/auth/verify-email-otp/', { email, otp, purpose });
     const { access, refresh, user: userData } = res.data;
-    localStorage.setItem('access_token', access);
-    localStorage.setItem('refresh_token', refresh);
-    setUser(userData);
-    return userData;
+    if (access && refresh) {
+      localStorage.setItem('access_token', access);
+      localStorage.setItem('refresh_token', refresh);
+    }
+    if (userData) {
+      setUser(userData);
+    }
+    return res.data;
+  };
+
+  const resendOTP = async (email, purpose = 'registration') => {
+    const res = await api.post('/auth/resend-otp/', { email, purpose });
+    return res.data;
+  };
+
+  const updateProfile = async (profileData) => {
+    const res = await api.put('/auth/profile/', profileData);
+    if (res.data?.user) {
+      setUser(res.data.user);
+    }
+    return res.data;
+  };
+
+  const sendMobileOTP = async (phone) => {
+    const res = await api.post('/auth/mobile/send-otp/', { phone });
+    return res.data;
+  };
+
+  const verifyMobileOTP = async (otp) => {
+    const res = await api.post('/auth/mobile/verify-otp/', { otp });
+    if (res.data?.user) {
+      setUser(res.data.user);
+    }
+    return res.data;
+  };
+
+  const changePassword = async (currentPassword, newPassword) => {
+    const res = await api.post('/auth/change-password/', {
+      current_password: currentPassword,
+      new_password: newPassword,
+    });
+    return res.data;
   };
 
   const logout = async () => {
@@ -60,13 +113,29 @@ export const AuthProvider = ({ children }) => {
     try {
       const res = await api.get('/auth/me/');
       setUser(res.data);
+      return res.data;
     } catch (e) {
       // ignore
     }
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, refreshUser }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        loading,
+        login,
+        register,
+        verifyEmailOTP,
+        resendOTP,
+        updateProfile,
+        sendMobileOTP,
+        verifyMobileOTP,
+        changePassword,
+        logout,
+        refreshUser,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

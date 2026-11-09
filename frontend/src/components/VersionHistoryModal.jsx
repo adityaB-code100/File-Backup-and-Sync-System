@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { X, History, Download, RotateCcw, ShieldCheck, Clock } from 'lucide-react';
 import api from '../services/api';
+import { formatDateTime } from '../utils/dateUtils.js';
 
 const VersionHistoryModal = ({ file, onClose, onRestored }) => {
   const [revisions, setRevisions] = useState([]);
@@ -102,7 +103,7 @@ const VersionHistoryModal = ({ file, onClose, onRestored }) => {
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {revisions.map((rev) => {
-                const isCurrent = file.current_version_id === rev.id || file.version_number === rev.version_number;
+                const isCurrent = rev.is_current === true || file.current_version_id === rev.id || file.version_number === rev.version_number;
                 return (
                   <div
                     key={rev.id}
@@ -128,7 +129,7 @@ const VersionHistoryModal = ({ file, onClose, onRestored }) => {
                         )}
                         <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
                           <Clock size={12} />
-                          {new Date(rev.created_at).toLocaleString()}
+                          {formatDateTime(rev.created_at)}
                         </span>
                       </div>
                       <div style={{ display: 'flex', gap: 14, fontSize: '0.78rem', color: 'var(--text-dim)' }}>

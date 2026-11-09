@@ -3,6 +3,7 @@ import {
   RefreshCw, CheckCircle, Wifi, Activity, Clock, FileText, Folder,
 } from 'lucide-react';
 import api from '../services/api';
+import { formatTime, formatRelativeTime, parseDate } from '../utils/dateUtils.js';
 
 const RightSidebar = ({ refreshKey }) => {
   const [sessionStatus, setSessionStatus] = useState('idle'); // 'idle' | 'loading' | 'connected' | 'offline'
@@ -10,15 +11,6 @@ const RightSidebar = ({ refreshKey }) => {
   const [activities, setActivities] = useState([]);
   const [activityLoading, setActivityLoading] = useState(true);
   const [activityError, setActivityError] = useState(false);
-
-  const formatTime = (d) => {
-    if (!d) return '—';
-    const now = new Date();
-    const diff = Math.floor((now - new Date(d)) / 1000);
-    if (diff < 60) return 'Just now';
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-    return new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
 
   /**
    * Fetches recent changes (last 30 minutes) from GET /api/files/changes/?since=<ISO>.
@@ -32,9 +24,8 @@ const RightSidebar = ({ refreshKey }) => {
       const res = await api.get(`/files/changes/?since=${encodeURIComponent(since)}`);
       const changes = res.data.changes || [];
       // Sort by updated_at / created_at descending, take top 5
-      const sorted = [...changes].sort(
-        (a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at)
-      ).slice(0, 5);
+      const getTime = (item) => (parseDate(item?.updated_at || item?.created_at)?.getTime() || 0);
+      const sorted = [...changes].sort((a, b) => getTime(b) - getTime(a)).slice(0, 5);
       setActivities(sorted);
       setSessionStatus('connected');
       setLastChecked(new Date());
@@ -154,7 +145,7 @@ const RightSidebar = ({ refreshKey }) => {
                       : <><FileText size={11} style={{ display: 'inline', marginRight: 3 }} />{item.name}</>}
                   </div>
                   <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginTop: 2 }}>
-                    Modified {formatTime(item.updated_at || item.created_at)}
+                    Modified {formatRelativeTime(item.updated_at || item.created_at)}
                   </div>
                 </div>
               </div>

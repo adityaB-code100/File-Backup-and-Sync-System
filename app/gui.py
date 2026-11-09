@@ -543,7 +543,7 @@ class VaultCloudGUI(tk.Tk):
     def _show_login_modal(self):
         modal = tk.Toplevel(self)
         modal.title("VaultCloud Login")
-        modal.geometry("380x260")
+        modal.geometry("380x290")
         modal.resizable(False, False)
         modal.grab_set()
 
@@ -573,8 +573,25 @@ class VaultCloudGUI(tk.Tk):
         pwd_entry = ttk.Entry(form, show="*", width=30)
         pwd_entry.grid(row=1, column=1, pady=6)
 
+        def _on_forgot_password(event=None):
+            def _handle_error(msg):
+                modal.after(0, lambda: messagebox.showerror("Forgot Password Error", msg, parent=modal))
+            auth.open_forgot_password(on_error=_handle_error)
+
+        forgot_lbl = ttk.Label(
+            form,
+            text="Forgot Password?",
+            cursor="hand2",
+            font=("Segoe UI", 8, "underline"),
+            foreground="#2563eb"
+        )
+        forgot_lbl.grid(row=2, column=1, sticky=tk.E, pady=(2, 6))
+        forgot_lbl.bind("<Button-1>", _on_forgot_password)
+        forgot_lbl.bind("<Enter>", lambda e: forgot_lbl.config(foreground="#1d4ed8"))
+        forgot_lbl.bind("<Leave>", lambda e: forgot_lbl.config(foreground="#2563eb"))
+
         err_lbl = ttk.Label(form, text="", foreground="red", font=("Segoe UI", 8))
-        err_lbl.grid(row=2, column=0, columnspan=2, pady=4)
+        err_lbl.grid(row=3, column=0, columnspan=2, pady=4)
 
         def _do_login():
             em = email_entry.get().strip()
@@ -601,7 +618,10 @@ class VaultCloudGUI(tk.Tk):
 
             threading.Thread(target=_bg, daemon=True).start()
 
-        ttk.Button(form, text="Sign In", command=_do_login, style="Primary.TButton").grid(row=3, column=0, columnspan=2, pady=12)
+        email_entry.bind("<Return>", lambda e: _do_login())
+        pwd_entry.bind("<Return>", lambda e: _do_login())
+
+        ttk.Button(form, text="Sign In", command=_do_login, style="Primary.TButton").grid(row=4, column=0, columnspan=2, pady=10)
 
     def _on_logout(self):
         confirm = messagebox.askyesno(

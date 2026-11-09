@@ -11,18 +11,21 @@
 | File | Change Type | Summary |
 |---|---|---|
 | `app/sync_engine.py` | **Modified** | Replaced old `poll_remote_changes` (single-pass, SQLite-only) with delegation to new `reconciler.run_reconciliation_cycle`. Removed `get_cloud_updated_path` logic from polling path. All other functions (`handle_local_change`, `reconcile_conflict`, `sync_individual_file`, etc.) unchanged. |
-| `app/watcher.py` | **Modified** | `DebouncedHandler.on_created` and `on_modified` now also check `reconciler.is_agent_writing()` in addition to the existing `IgnorePathContext`. Prevents watcher loops from agent-generated downloads. |
-| `app/db.py` | **Modified** | `init_db()` migration adds three new columns: `cloud_folder_id`, `cloud_path`, `last_seen_remote_at`. All migrations are non-destructive (`ALTER TABLE ... ADD COLUMN` with existence checks). |
+| `app/watcher.py` | **Modified** | Added `WriteSuppressionRegistry` with durable, hash-verified write suppression; `DebouncedHandler.on_created/on_modified` and `IndividualFileHandler` check both `is_agent_writing()` and `suppression_registry.should_suppress()`. |
+| `app/db.py` | **Modified** | `init_db()` migration v2/v3 adds `cloud_folder_id`, `cloud_path`, `last_seen_remote_at`, `is_tombstone`, `conflict_original_path`. Added `set_tombstone()` helper; non-destructive schema migrations. |
 | `app/main.py` | **Modified** | `startup_reconciliation` now calls `run_reconciliation_cycle` for a full bidirectional initial sync instead of a local-only walk. Added imports for `drive_client`, `reconciler`, and `IgnorePathContext`. |
+| `app/reconciler.py` | **Modified** | Added tombstone support, conflict copy local-only handling, safe first-time sync conflict divergence, durable hash-suppression registration, and fail-fast remote fetch error propagation. |
 
 ## 2. Files Created
 
 | File | Purpose |
 |---|---|
-| `app/reconciler.py` | **New module** — the full bidirectional reconciliation engine. Contains: `fetch_remote_file_tree`, `scan_local_tree`, `classify_file_state`, `build_reconciliation_plan`, `execute_plan`, `_execute_upload`, `_execute_download`, `_execute_conflict`, `run_reconciliation_cycle`, `AgentWriteContext`, `is_agent_writing`. |
-| `app/test_bidirectional_sync.py` | **New test file** — 45 automated tests across 10 test suites covering the decision table, plan builder, atomic download, remote discovery, conflict handling, loop prevention, reliability, and SQLite migration. |
-| `docs/BIDIRECTIONAL_SYNC_ARCHITECTURE.md` | Architecture documentation |
-| `docs/BIDIRECTIONAL_SYNC_TEST_REPORT.md` | Test execution report |
+| `app/reconciler.py` | **New module** (Phase 1) — the full bidirectional reconciliation engine. |
+| `app/test_bidirectional_sync.py` | **Test suite** (Phase 1) — 45 automated unit tests covering the decision table, plan builder, atomic download, remote discovery, conflict handling, loop prevention, reliability, and SQLite migration. |
+| `app/test_phase2_hardening.py` | **Test suite** (Phase 2) — 22 automated unit and integration tests covering tombstones, loop prevention, safe first-time sync, conflict lifecycles, and 10 end-to-end integration scenarios. |
+| `docs/BIDIRECTIONAL_SYNC_ARCHITECTURE.md` | Architecture documentation (updated for Phase 2) |
+| `docs/BIDIRECTIONAL_SYNC_TEST_REPORT.md` | Test execution report (updated for Phase 2) |
+| `docs/BIDIRECTIONAL_SYNC_PHASE2_HARDENING.md` | Comprehensive Phase 2 root causes, reproductions, fixes, and results |
 | `docs/BIDIRECTIONAL_SYNC_IMPLEMENTATION.md` | This file |
 
 ## 3. Files NOT Modified
@@ -84,8 +87,8 @@ The function signature `poll_remote_changes(auth, watched_dir)` is preserved for
 ### Decision 3: `AgentWriteContext` is a second, independent guard alongside `IgnorePathContext`
 `IgnorePathContext` is a context variable in `watcher.py`. `AgentWriteContext` lives in `reconciler.py`. Using two independent guards ensures that even if one module is refactored, the loop prevention remains robust. The import of `reconciler` from `watcher` is deferred (`from reconciler import is_agent_writing` inside the method) to avoid a circular import at module load time.
 
-### Decision 4: Cloud is authoritative on first encounter with differing content
-When a file exists on both sides but neither has a SQLite record (first-time sync), and the hashes differ, the cloud version is downloaded. Rationale: the cloud is the canonical store; local copies may be stale or partial.
+### Decision 4: Safe first-time synchronization preserves both versions (Phase 2 Update)
+When a file exists on both sides but neither has a SQLite record (first-time sync), and the hashes differ, previous Phase 1 behaviour defaulted to `download_changed` (cloud authoritative), which destroyed local edits. In Phase 2, this rule was hardened: the file is classified as `conflict` (`ACTION_CONFLICT`). The local version is preserved in a named timestamped conflict copy, the cloud version is downloaded to the canonical path, and both versions remain completely recoverable without data loss.
 
 ### Decision 5: Deletions are never automatically propagated
 Neither local deletion → cloud purge nor cloud deletion → local purge is performed automatically. Both are recorded in SQLite as status changes only. This avoids irreversible data loss from transient network errors.
@@ -158,3 +161,4 @@ set VAULTCLOUD_BACKEND_URL=http://your-backend.example.com/api
 | `get_cloud_updated_path` dead code remains | LOW | The function exists in sync_engine.py but is no longer called from the polling path. Safe to remove in a future cleanup. |
 | Watcher suppression import is deferred | INFORMATIONAL | `from reconciler import is_agent_writing` is called inside each event handler to avoid circular import. Performance impact is negligible (Python module cache hit after first import). |
 | Git branch creation blocked | INFORMATIONAL | Windows file permission on `.git/refs/heads/` prevents creating `.lock` files in the sandbox. All changes were committed to `main`. |
+

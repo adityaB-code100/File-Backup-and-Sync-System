@@ -20,7 +20,16 @@ class RevisionListView(APIView):
             return Response({"error": "File not found", "code": "NOT_FOUND"}, status=status.HTTP_404_NOT_FOUND)
 
         revisions = FileVersion.objects(file=file_record).order_by('-version_number')
-        return Response([r.to_dict() for r in revisions], status=status.HTTP_200_OK)
+        cur_id = str(file_record.current_version.id) if file_record.current_version else None
+        cur_ver_num = file_record.current_version.version_number if file_record.current_version else None
+
+        result = []
+        for r in revisions:
+            r_dict = r.to_dict()
+            r_dict["is_current"] = (str(r.id) == cur_id or (cur_ver_num is not None and r.version_number == cur_ver_num))
+            result.append(r_dict)
+
+        return Response(result, status=status.HTTP_200_OK)
 
 class RevisionContentView(APIView):
     permission_classes = [permissions.IsAuthenticated]

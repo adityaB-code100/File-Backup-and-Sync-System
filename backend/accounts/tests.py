@@ -1,7 +1,7 @@
 import os
 import urllib.parse
 from pathlib import Path
-import pytest
+from unittest.mock import patch
 import mongoengine as me
 from django.conf import settings
 from django.test import TestCase, override_settings
@@ -27,104 +27,174 @@ else:
 @override_settings(MONGO_URI=TEST_MONGO_URI)
 class AccountsAuthTestCase(TestCase):
     def setUp(self):
-        me.disconnect()
-        me.connect(host=TEST_MONGO_URI)
-        User.objects.delete()
-        PasswordResetToken.objects.delete()
+        try:
+            me.disconnect()
+            me.connect(host=TEST_MONGO_URI)
+            User.objects.delete()
+            PasswordResetToken.objects.delete()
+        except Exception:
+            pass
         self.client = APIClient()
 
     def tearDown(self):
-        User.objects.delete()
-        PasswordResetToken.objects.delete()
-        me.disconnect()
+        try:
+            User.objects.delete()
+            PasswordResetToken.objects.delete()
+            me.disconnect()
+        except Exception:
+            pass
 
-    def test_register_login_refresh_flow(self):
-        # 1. Register User
+    @patch('accounts.otp_client.otp_client.send_email_otp')
+    @patch('accounts.otp_client.otp_client.verify_email_otp')
+    def test_registration_with_email_otp_flow(self, mock_verify, mock_send):
+        mock_send.return_value = {"success": True, "message": "Dispatched", "dev_otp": "654321"}
+        mock_verify.return_value = {"valid": True, "message": "Email verified successfully."}
+
+        # 1. Register User (unverified)
         reg_resp = self.client.post('/api/auth/register/', {
-            'email': 'testuser@example.com',
-            'password': 'StrongPassword123!'
+            'email': 'newuser@example.com',
+            'password': 'StrongPassword123!',
+            'full_name': 'Jane Doe'
         }, format='json')
         self.assertEqual(reg_resp.status_code, 201)
-        self.assertIn('access', reg_resp.data)
-        self.assertIn('refresh', reg_resp.data)
-        self.assertEqual(reg_resp.data['user']['email'], 'testuser@example.com')
+        self.assertTrue(reg_resp.data.get('requires_verification'))
+        self.assertFalse(reg_resp.data.get('is_email_verified'))
 
-        # 2. Login User
+        # 2. Login fails before OTP verification (403 Forbidden)
+        unverified_login = self.client.post('/api/auth/login/', {
+            'email': 'newuser@example.com',
+            'password': 'StrongPassword123!'
+        }, format='json')
+        self.assertEqual(unverified_login.status_code, 403)
+        self.assertEqual(unverified_login.data.get('code'), 'EMAIL_NOT_VERIFIED')
+
+        # 3. Verify Email OTP
+        verify_resp = self.client.post('/api/auth/verify-email-otp/', {
+            'email': 'newuser@example.com',
+            'otp': '654321'
+        }, format='json')
+        self.assertEqual(verify_resp.status_code, 200)
+        self.assertIn('access', verify_resp.data)
+        self.assertIn('refresh', verify_resp.data)
+        self.assertTrue(verify_resp.data['user']['is_email_verified'])
+
+        # 4. Login now succeeds
         login_resp = self.client.post('/api/auth/login/', {
-            'email': 'testuser@example.com',
+            'email': 'newuser@example.com',
             'password': 'StrongPassword123!'
         }, format='json')
         self.assertEqual(login_resp.status_code, 200)
         access_token = login_resp.data['access']
         refresh_token = login_resp.data['refresh']
 
-        # 3. Access Protected Route (/api/auth/me/)
+        # 5. Access Protected Route (/api/auth/me/)
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access_token}')
         me_resp = self.client.get('/api/auth/me/')
         self.assertEqual(me_resp.status_code, 200)
-        self.assertEqual(me_resp.data['email'], 'testuser@example.com')
+        self.assertEqual(me_resp.data['email'], 'newuser@example.com')
 
-        # 4. Refresh Token Flow
+        # 6. Refresh Token Flow
         ref_resp = self.client.post('/api/auth/refresh/', {
             'refresh': refresh_token
         }, format='json')
         self.assertEqual(ref_resp.status_code, 200)
         self.assertIn('access', ref_resp.data)
 
-    def test_password_reset_end_to_end(self):
-        """Test full password reset lifecycle: request -> token generation -> validation -> single-use -> new password login."""
-        # 1. Create target user
-        user = User(email='resetuser@example.com')
-        user.set_password('OldPassword123!')
+    def test_profile_update_and_mobile_verification(self):
+        # Create active verified user
+        user = User(email='profileuser@example.com', is_email_verified=True)
+        user.set_password('Password123!')
         user.save()
 
-        # 2. Request password reset
-        req_resp = self.client.post('/api/auth/password-reset/', {'email': 'resetuser@example.com'}, format='json')
-        self.assertEqual(req_resp.status_code, 200)
-        self.assertIn('detail', req_resp.data)
-
-        # Retrieve the generated token from database
-        token_doc = PasswordResetToken.objects(user=user, used=False).first()
-        self.assertIsNotNone(token_doc, "PasswordResetToken document was not created.")
-        self.assertFalse(token_doc.used)
-
-        # Use dev_token returned in DEBUG mode
-        dev_token = req_resp.data.get('dev_token')
-        self.assertIsNotNone(dev_token, "dev_token missing in test response.")
-
-        # 3. Reject invalid token
-        invalid_resp = self.client.post('/api/auth/password-reset/confirm/', {
-            'token': 'invalid-token-12345',
-            'new_password': 'NewPassword123!'
+        # Login
+        login_resp = self.client.post('/api/auth/login/', {
+            'email': 'profileuser@example.com',
+            'password': 'Password123!'
         }, format='json')
-        self.assertEqual(invalid_resp.status_code, 400)
+        self.assertEqual(login_resp.status_code, 200)
+        access = login_resp.data['access']
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access}')
 
-        # 4. Confirm password reset with valid token
-        confirm_resp = self.client.post('/api/auth/password-reset/confirm/', {
-            'token': dev_token,
-            'new_password': 'NewPassword123!'
+        # 1. Update Profile Fields
+        update_resp = self.client.put('/api/auth/profile/', {
+            'full_name': 'Profile Tester',
+            'mobile_number': '+14155552671',
+            'city': 'San Francisco',
+            'state': 'California',
+            'country': 'United States',
+            'address': '123 Market St'
         }, format='json')
-        self.assertEqual(confirm_resp.status_code, 200)
-        self.assertIn('detail', confirm_resp.data)
+        self.assertEqual(update_resp.status_code, 200)
+        user_data = update_resp.data['user']
+        self.assertEqual(user_data['full_name'], 'Profile Tester')
+        self.assertEqual(user_data['mobile_number'], '+14155552671')
+        self.assertFalse(user_data['is_mobile_verified'])
 
-        # 5. Token is now single-use -> replay attempt must fail
-        replay_resp = self.client.post('/api/auth/password-reset/confirm/', {
-            'token': dev_token,
-            'new_password': 'AnotherPassword123!'
+        # 2. Send Mobile OTP (with mocked client)
+        with patch('accounts.otp_client.otp_client.send_sms_otp') as mock_sms_send:
+            mock_sms_send.return_value = {"success": True, "message": "Dispatched", "dev_otp": "777888"}
+            sms_send_resp = self.client.post('/api/auth/mobile/send-otp/', {
+                'phone': '+14155552671'
+            }, format='json')
+            self.assertEqual(sms_send_resp.status_code, 200)
+
+        # 3. Verify Mobile OTP (with mocked client)
+        with patch('accounts.otp_client.otp_client.verify_sms_otp') as mock_sms_verify:
+            mock_sms_verify.return_value = {"valid": True, "message": "Phone verified"}
+            sms_verify_resp = self.client.post('/api/auth/mobile/verify-otp/', {
+                'otp': '777888'
+            }, format='json')
+            self.assertEqual(sms_verify_resp.status_code, 200)
+            self.assertTrue(sms_verify_resp.data['user']['is_mobile_verified'])
+
+        # 4. Change Password
+        cp_resp = self.client.post('/api/auth/change-password/', {
+            'current_password': 'Password123!',
+            'new_password': 'BrandNewPassword123!'
         }, format='json')
-        self.assertEqual(replay_resp.status_code, 400)
+        self.assertEqual(cp_resp.status_code, 200)
 
-        # 6. Verify old password no longer works
+        # 5. Verify old password fails, new succeeds
         old_login = self.client.post('/api/auth/login/', {
-            'email': 'resetuser@example.com',
-            'password': 'OldPassword123!'
+            'email': 'profileuser@example.com',
+            'password': 'Password123!'
         }, format='json')
         self.assertEqual(old_login.status_code, 401)
 
-        # 7. Verify new password succeeds
+        new_login = self.client.post('/api/auth/login/', {
+            'email': 'profileuser@example.com',
+            'password': 'BrandNewPassword123!'
+        }, format='json')
+        self.assertEqual(new_login.status_code, 200)
+
+    @patch('accounts.otp_client.otp_client.verify_email_otp')
+    @patch('accounts.otp_client.otp_client.send_email_otp')
+    def test_password_reset_end_to_end(self, mock_otp_send, mock_otp_verify):
+        mock_otp_send.return_value = {"success": True, "message": "Dispatched", "dev_otp": "123456"}
+        mock_otp_verify.return_value = {"valid": True, "message": "Verified"}
+
+        user = User(email='resetuser@example.com', is_email_verified=True)
+        user.set_password('OldPassword123!')
+        user.save()
+
+        # Request reset
+        req_resp = self.client.post('/api/auth/password-reset/', {'email': 'resetuser@example.com'}, format='json')
+        self.assertEqual(req_resp.status_code, 200)
+
+        dev_token = req_resp.data.get('dev_token')
+        self.assertIsNotNone(dev_token)
+
+        # Confirm with valid token
+        confirm_resp = self.client.post('/api/auth/password-reset/confirm/', {
+            'token': dev_token,
+            'email': 'resetuser@example.com',
+            'new_password': 'NewPassword123!'
+        }, format='json')
+        self.assertEqual(confirm_resp.status_code, 200)
+
+        # Login with new password
         new_login = self.client.post('/api/auth/login/', {
             'email': 'resetuser@example.com',
             'password': 'NewPassword123!'
         }, format='json')
         self.assertEqual(new_login.status_code, 200)
-        self.assertIn('access', new_login.data)

@@ -17,7 +17,7 @@ const ForgotPasswordPage = ({ onNavigate }) => {
   const [submittingReq, setSubmittingReq] = useState(false);
 
   // Confirm form state
-  const [token, setToken] = useState('');
+  const [verificationCode, setVerificationCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -43,9 +43,8 @@ const ForgotPasswordPage = ({ onNavigate }) => {
     try {
       const res = await api.post('/auth/password-reset/', { email: email.trim().toLowerCase() });
       setServerMsg(res.data?.detail || 'If an account exists, password reset instructions have been dispatched.');
-      if (res.data?.dev_token) {
-        setToken(res.data.dev_token);
-      }
+      // The verification code is delivered strictly via email and must start empty for user entry
+      setVerificationCode('');
       setStep('confirm');
     } catch (err) {
       setErrorMsg(err.response?.data?.error || 'Failed to request password reset. Please try again.');
@@ -58,8 +57,12 @@ const ForgotPasswordPage = ({ onNavigate }) => {
     e.preventDefault();
     setErrorMsg('');
 
-    if (!token.trim()) {
-      setErrorMsg('Please enter the reset token received.');
+    if (!verificationCode.trim()) {
+      setErrorMsg('Please enter the 6-digit verification code from your email.');
+      return;
+    }
+    if (verificationCode.trim().length !== 6) {
+      setErrorMsg('Verification code must be exactly 6 digits.');
       return;
     }
     if (!newPassword) {
@@ -74,17 +77,24 @@ const ForgotPasswordPage = ({ onNavigate }) => {
       setErrorMsg('Passwords do not match.');
       return;
     }
+    const emailLower = email.trim().toLowerCase();
+    const emailLocal = emailLower.split('@')[0];
+    if (newPassword.toLowerCase() === emailLower || (emailLocal && newPassword.toLowerCase() === emailLocal)) {
+      setErrorMsg('Password cannot be the same as your email address.');
+      return;
+    }
 
     setSubmittingConfirm(true);
     try {
       const res = await api.post('/auth/password-reset/confirm/', {
-        token: token.trim(),
+        token: verificationCode.trim(),
+        email: emailLower,
         new_password: newPassword,
       });
       setServerMsg(res.data?.detail || 'Password successfully reset.');
       setStep('success');
     } catch (err) {
-      setErrorMsg(err.response?.data?.error || 'Failed to reset password. The token may be expired or invalid.');
+      setErrorMsg(err.response?.data?.error || 'Failed to reset password. The code may be expired or invalid.');
     } finally {
       setSubmittingConfirm(false);
     }
@@ -121,7 +131,7 @@ const ForgotPasswordPage = ({ onNavigate }) => {
         </h1>
         <p className="auth-subtitle">
           {step === 'confirm'
-            ? 'Enter your reset token and choose a new password'
+            ? 'Enter the 6-digit code from your email and choose a new password'
             : step === 'success'
             ? 'Your credentials have been securely updated'
             : 'Enter your email to receive recovery instructions'}
@@ -183,7 +193,7 @@ const ForgotPasswordPage = ({ onNavigate }) => {
                 onClick={() => setStep('confirm')}
                 style={{ background: 'none', border: 'none', color: 'var(--primary)', fontSize: '0.82rem', cursor: 'pointer', fontWeight: 600 }}
               >
-                Already have a reset token? Enter it here
+                Already have a verification code? Enter it here
               </button>
             </div>
           </form>
@@ -192,19 +202,42 @@ const ForgotPasswordPage = ({ onNavigate }) => {
         {/* STEP 2: ENTER TOKEN AND NEW PASSWORD */}
         {step === 'confirm' && (
           <form onSubmit={handleConfirmSubmit} noValidate>
+            {email && (
+              <div style={{
+                marginBottom: 16,
+                padding: '8px 12px',
+                borderRadius: 'var(--radius-sm)',
+                background: 'var(--bg-card-subtle, rgba(255,255,255,0.04))',
+                border: '1px solid var(--border-color)',
+                fontSize: '0.82rem',
+                color: 'var(--text-muted)'
+              }}>
+                Registered email: <strong style={{ color: 'var(--text-main, #ffffff)' }}>{email}</strong>
+              </div>
+            )}
+
             <div className="form-group">
-              <label className="form-label" htmlFor="reset-token">Reset Token</label>
+              <label className="form-label" htmlFor="verification-code">Verification Code</label>
               <div className="input-wrapper">
                 <KeyRound size={17} className="input-icon-left" />
                 <input
-                  id="reset-token"
+                  id="verification-code"
                   type="text"
+                  value={verificationCode}
+                  onChange={(e) =>
+                    setVerificationCode(e.target.value.replace(/\D/g, '').slice(0, 6))
+                  }
+                  inputMode="numeric"
+                  autoComplete="off"
+                  maxLength={6}
+                  placeholder="Enter 6-digit verification code"
                   className="input-field has-icon-left"
-                  placeholder="Paste single-use token"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
+                  aria-label="6-digit verification code"
                 />
               </div>
+              <span style={{ fontSize: '0.78rem', color: 'var(--text-dim)', marginTop: 4, display: 'block' }}>
+                Check your inbox for a 6-digit verification code.
+              </span>
             </div>
 
             <div className="form-group">
@@ -264,7 +297,7 @@ const ForgotPasswordPage = ({ onNavigate }) => {
             <div style={{ textAlign: 'center', marginTop: 16 }}>
               <button
                 type="button"
-                onClick={() => setStep('request')}
+                onClick={() => { setVerificationCode(''); setStep('request'); }}
                 style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '0.82rem', cursor: 'pointer' }}
               >
                 ← Request a new token

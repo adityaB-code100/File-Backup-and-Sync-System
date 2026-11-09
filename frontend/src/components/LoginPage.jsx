@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
+import OTPVerificationModal from './OTPVerificationModal';
 
 // ── Validation helpers ─────────────────────────────────────────
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -35,6 +36,8 @@ const LoginPage = ({ onNavigate }) => {
   const [rememberMe, setRememberMe] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState('');
+  const [showOTPModal, setShowOTPModal] = useState(false);
+  const [unverifiedEmail, setUnverifiedEmail] = useState('');
 
   // Field-level errors
   const [emailErr, setEmailErr] = useState('');
@@ -64,11 +67,18 @@ const LoginPage = ({ onNavigate }) => {
       }
       // AuthContext updates user → App.jsx re-renders to dashboard automatically
     } catch (err) {
-      const msg =
-        err.response?.data?.error ||
-        err.response?.data?.detail ||
-        'Authentication failed. Please check your credentials.';
-      setServerError(msg);
+      if (err.response?.data?.code === 'EMAIL_NOT_VERIFIED') {
+        const targetEmail = err.response.data.email || email.trim().toLowerCase();
+        setUnverifiedEmail(targetEmail);
+        setShowOTPModal(true);
+        setServerError('Your account is not yet verified. Please enter the verification code sent to your email.');
+      } else {
+        const msg =
+          err.response?.data?.error ||
+          err.response?.data?.detail ||
+          'Authentication failed. Please check your credentials.';
+        setServerError(msg);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -233,6 +243,18 @@ const LoginPage = ({ onNavigate }) => {
           AES-256-GCM Encryption · Argon2 Auth
         </div>
       </div>
+
+      {/* OTP Verification Modal */}
+      <OTPVerificationModal
+        isOpen={showOTPModal}
+        onClose={() => setShowOTPModal(false)}
+        recipient={unverifiedEmail}
+        channel="email"
+        purpose="registration"
+        onSuccess={() => {
+          // After verification, AuthContext has set user and App router displays dashboard
+        }}
+      />
     </div>
   );
 };
