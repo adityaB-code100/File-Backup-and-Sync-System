@@ -1,197 +1,234 @@
-# VaultCloud — Secure File Backup & Sync Platform
+# VaultCloud — Secure Hybrid Cloud Synchronization & Storage
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Django](https://img.shields.io/badge/Django-5.0%2B-green.svg)](https://www.djangoproject.com/)
-[![React](https://img.shields.io/badge/React-19.2-61dafb.svg)](https://react.dev/)
-[![Vite](https://img.shields.io/badge/Vite-8.2-purple.svg)](https://vitejs.dev/)
+[![React](https://img.shields.io/badge/React-18.3-61dafb.svg)](https://react.dev/)
+[![Vite](https://img.shields.io/badge/Vite-8.3-purple.svg)](https://vitejs.dev/)
 [![MongoDB](https://img.shields.io/badge/MongoDB-Atlas%20%2F%20Local-13aa52.svg)](https://www.mongodb.com/)
-[![Security](https://img.shields.io/badge/Encryption-AES--256--GCM-red.svg)](https://en.wikipedia.org/wiki/Galois/Counter_Mode)
+[![Cryptography](https://img.shields.io/badge/Encryption-AES--256--GCM%20%7C%20STREAM-red.svg)](https://en.wikipedia.org/wiki/Galois/Counter_Mode)
+[![License](https://img.shields.io/badge/License-MIT-lightgrey.svg)](LICENSE)
 
-A self-hosted, end-to-end secure alternative to Google Drive featuring a **Django REST API** backend, **MongoDB** database (via `mongoengine`), **AES-256-GCM envelope encryption**, a **React 19 (Vite) web dashboard**, and a **multi-threaded Python desktop synchronization client** conforming to Google Drive API v3 semantics.
-
----
-
-## Key Features
-
-- **AES-256-GCM Envelope Encryption**: Every file revision is encrypted on disk with a fresh, random 256-bit Data Encryption Key (DEK). DEKs are wrapped using a master Key Encryption Key (KEK).
-- **Content-Addressed Storage & Deduplication**: Plaintext SHA-256 hashes are computed pre-encryption. Identical file blobs are stored physically only once on disk.
-- **Atomic Distributed File Locking**: Prevents multi-device write collisions with device-bound atomic locks and 300-second TTL auto-expiry.
-- **Autonomous Desktop Sync Agent**: Event-driven filesystem monitoring with millisecond debouncing, atomic save handling, and offline change reconciliation.
-- **Zero-Loss Conflict Resolution**: Generates timestamped conflicted copies whenever true concurrent updates collide (HTTP 409 Conflict).
-- **Collision-Safe Duplicate Naming**: Automatically renames colliding uploads within the same cloud folder (`file (1).ext`), correctly preserving multi-dot extensions (e.g. `archive.tar.gz`).
-- **Version History & Rollback**: Track revisions, inspect SHA-256 hashes, download past revisions, or restore historical snapshots.
-- **Soft-Delete Trash**: Move items to trash with full restoration or permanent deletion options.
-- **Argon2 Password Hashing & JWT Auth**: Secure authentication with SimpleJWT, token refresh queuing, and rate limiting.
-- **Modern Glassmorphism Web UI**: Sleek React dashboard with grid/list toggles, folder breadcrumbs, drag-and-drop ingestion, and live storage quota indicator.
+**VaultCloud** is a self-hosted, enterprise-grade cloud storage and continuous synchronization platform. It unites a **Django REST API** backend, **Rogaway STREAM AES-256-GCM envelope encryption**, a **React + Vite** web dashboard, a dedicated **Flask Mail & OTP microservice**, and an autonomous **Python Tkinter Desktop Agent** with event-driven bidirectional synchronization.
 
 ---
 
-## Repository Structure
+## Architecture Overview
 
-```
-backup-sync/
-├── app/                           # Desktop Sync Agent (Watcher, Engine, SQLite, GUI)
-│   ├── gui.py                     # Tkinter desktop graphical interface
-│   ├── main.py                    # CLI directory sync daemon
-│   ├── watcher.py                 # Watchdog observer & debounced event queues
-│   ├── sync_engine.py             # Sync state machine & conflict reconciliation
-│   ├── drive_client.py            # HTTP client with Tenacity exponential retry
-│   ├── db.py                      # Local SQLite persistence manager
-│   ├── auth.py                    # Client session & JWT token manager
-│   └── test_*.py                  # Automated test suites (isolation, naming)
-├── backend/                       # Django REST API & Storage Backend
-│   ├── accounts/                  # User authentication & Argon2 password hashing
-│   ├── files/                     # Files, folders, revisions, and locking API
-│   ├── storage/                   # Storage quota & secondary disaster recovery
-│   ├── cloud_storage/             # Django settings, URLs, and middleware
-│   ├── manage.py                  # Django CLI management script
-│   └── Procfile                   # Production deployment process definition
-├── frontend/                      # React 19 + Vite Web Application
-│   ├── src/
-│   │   ├── components/            # FileBrowser, Sidebar, Navbar, VersionModal, Trash
-│   │   ├── services/              # Axios client with JWT refresh queue
-│   │   └── context/               # Global AuthContext
-│   ├── package.json
-│   └── vite.config.js
-├── docs/                          # Architecture & Deployment Documentation
-│   ├── DEPLOYMENT.md              # Deployment guide & disk configuration
-│   └── PROJECT_DIAGNOSIS_REPORT.md# Reliability audit & verification findings
-├── PROJECT_TECHNICAL_ANALYSIS.md  # Comprehensive project report reference
-├── requirements.txt               # Unified Python dependencies
-└── .gitignore                     # Multi-tier secret and cache exclusions
+```mermaid
+graph TD
+    subgraph Client Layer
+        Desktop["Desktop Agent (Python/Tkinter)"]
+        WebUI["Web Dashboard (React + Vite)"]
+    end
+
+    subgraph Service Layer
+        Backend["Django REST API (:8000)"]
+        OTP["Mail & OTP Service (:5001)"]
+    end
+
+    subgraph Storage Layer
+        Mongo[("MongoDB Database")]
+        Blobs[("Encrypted Blob Storage (file_storage/)")]
+        SQLite[("Local Client State (sync_state.db)")]
+    end
+
+    Desktop -->|Local File Events| SQLite
+    Desktop -->|HTTPS / JWT REST| Backend
+    WebUI -->|HTTPS / JWT REST| Backend
+    Backend -->|Shared HMAC Secret| OTP
+    Backend -->|Metadata & Quotas| Mongo
+    Backend -->|STREAM AEAD Chunks| Blobs
+    OTP -->|SMTP / STARTTLS| EmailGateway["Email Gateway"]
+    OTP -->|Twilio API| SMSGateway["SMS Gateway"]
 ```
 
 ---
 
-## Quick Start Guide
+## Bidirectional Synchronization Flow
 
-### Prerequisites
-- Python 3.10 or higher
-- Node.js 18 or higher & npm
-- MongoDB 6.0+ running locally or MongoDB Atlas URI
+The desktop agent monitors local directories and reconciles state with the cloud using a 3-way reconciliation state machine:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant LocalFS as Local Filesystem
+    participant Watcher as Watchdog Observer
+    participant Engine as Reconciler & Engine
+    participant SQLite as Local sync_state.db
+    participant Cloud as VaultCloud API
+
+    User->>LocalFS: Create / Modify file
+    LocalFS-->>Watcher: Filesystem notification
+    Watcher->>Engine: Debounced file event
+    Engine->>SQLite: Query prior sync record
+    alt Local change only
+        Engine->>Cloud: POST /api/files/ (STREAM AEAD Upload)
+        Cloud-->>Engine: 201 Created (cloud_id, version, sha256)
+        Engine->>SQLite: Update path, hash, cloud_id, sync_time
+    else Concurrent modification (Conflict)
+        Engine->>Cloud: Attempt upload with prior version token
+        Cloud-->>Engine: 409 Conflict (remote has changed)
+        Engine->>LocalFS: Create "filename (conflict from cloud YYYY-MM-DD).ext"
+        Engine->>Cloud: Download remote version to active file
+        Engine->>SQLite: Record conflict resolution
+    end
+```
 
 ---
 
-### 1. Backend Setup
+## Security Model & Cryptography
 
+VaultCloud implements **Server-Side Envelope Encryption (AES-256-GCM)** designed for multi-client accessibility and cryptographic integrity:
+
+### Cryptographic Hierarchy
+1. **Master Key Encryption Key (KEK)**: 256-bit AES master key loaded strictly via environment variable (`FILE_ENCRYPTION_KEK`) or external secret manager. Silent fallbacks are strictly prohibited in production.
+2. **Data Encryption Key (DEK)**: Unique 256-bit cryptographically secure random key generated per uploaded file version (`os.urandom(32)`).
+3. **DEK Wrapping**: DEK is wrapped using the Master KEK with AES-256-GCM, storing the resulting ciphertext and 12-byte initialization vector (`dek_iv`) in database metadata.
+4. **Streaming AEAD (`VC02` Format)**:
+   - Chunked Rogaway STREAM construction with fixed 64 KiB blocks.
+   - Nonce-derivation uses a 7-byte random prefix + 4-byte monotonic chunk counter + 1-byte end-of-stream flag (`\x00` interim, `\x01` final).
+   - O(1) constant memory footprint regardless of file size (tested up to 100 MB limits).
+   - Instant tamper detection: bit-flips, reordering, and truncated streams raise `CryptographicIntegrityError`.
+
+> [!NOTE]
+> **Architecture Clarification**: VaultCloud uses **Server-Side Envelope Encryption**, not Zero-Knowledge encryption. The Master KEK is managed server-side, enabling full web dashboard previewing, thumbnailing, and direct browser downloads without requiring client-side WebAssembly decryption keys.
+
+---
+
+## Service Port Configuration
+
+| Component | Default Port | Environment Variable | Protocol |
+|---|---|---|---|
+| Django REST API | `8000` | `PORT` / `VAULTCLOUD_BACKEND_URL` | HTTP / HTTPS |
+| Web Dashboard | `5173` | `PORT` / `VAULTCLOUD_WEB_URL` | HTTP / HTTPS |
+| Mail & OTP Microservice | `5001` | `OTP_SERVICE_PORT` | HTTP / HTTPS |
+| MongoDB Database | `27017` | `MONGO_URI` | MongoDB Wire (TLS) |
+
+---
+
+## Prerequisites
+
+- **Python**: 3.11+ (Python 3.12 recommended)
+- **Node.js**: 18+ (Node 20+ or 22+ recommended)
+- **MongoDB**: Community Server 6.0+ or MongoDB Atlas Cluster
+- **Virtualenv**: Python standard `venv`
+
+---
+
+## Quickstart Guide
+
+### 1. Clone & Setup Python Virtual Environment
 ```bash
-cd backend
+git clone https://github.com/adityaB-code100/File_Backup_Sync.git
+cd File_Backup_Sync
 
-# Copy environment template
-cp .env.example .env
-
-# Edit .env with your MongoDB URI, SECRET_KEY, and FILE_ENCRYPTION_KEK
-# (See Environment Configuration section below)
+# Create and activate virtual environment
+python -m venv venv
+.\venv\Scripts\Activate.ps1   # Windows PowerShell
+# source venv/bin/activate    # Linux / macOS
 
 # Install dependencies
 pip install -r requirements.txt
-
-# Run system checks and tests
-python manage.py check
-python manage.py test
-
-# Start the development server
-python manage.py runserver 8000
+pip install -r mail_otp_server/requirements.txt
 ```
-Backend REST API will be accessible at `http://localhost:8000/api/`.
 
----
+### 2. Configure Environment Files
+```bash
+cp .env.example .env
+cp mail_otp_server/.env.example mail_otp_server/.env
+cp frontend/.env.example frontend/.env
+```
+Generate a cryptographically secure 256-bit Master KEK and set `FILE_ENCRYPTION_KEK`:
+```bash
+python -c "import os, base64; print(base64.b64encode(os.urandom(32)).decode())"
+```
 
-### 2. Frontend Setup
+### 3. Start Backend Services
 
+**Terminal 1 — Mail & OTP Service:**
+```bash
+python mail_otp_server/run.py
+```
+
+**Terminal 2 — Django REST API:**
+```bash
+python backend/manage.py migrate
+python backend/manage.py runserver 8000
+```
+
+**Terminal 3 — React Web Dashboard:**
 ```bash
 cd frontend
-
-# Copy environment template
-cp .env.example .env
-
-# Install Node dependencies
 npm install
-
-# Start the development server
 npm run dev
 ```
-Frontend web application will be accessible at `http://localhost:5173/`.
 
-To build for production:
+**Terminal 4 — Desktop Agent GUI:**
 ```bash
-npm run build
+python -m app.main
 ```
 
 ---
 
-### 3. Desktop Sync Agent
+## Environment Variables Reference
 
-To launch the graphical desktop synchronization agent:
-```bash
-# From the project root
-python app/gui.py
+### Root & Backend (`.env`)
+```ini
+SECRET_KEY=your-django-cryptographic-secret-key-here
+DEBUG=True
+ALLOWED_HOSTS=localhost,127.0.0.1
+MONGO_URI=mongodb://localhost:27017/cloud_storage_db
+FILE_ENCRYPTION_KEK=your-base64-32-byte-master-kek-here
+OTP_SERVICE_URL=http://localhost:5001
+OTP_SERVICE_SECRET=your-shared-internal-otp-secret-here
+VAULTCLOUD_WEB_URL=http://localhost:5173
+VAULTCLOUD_BACKEND_URL=http://localhost:8000/api
+MAX_UPLOAD_SIZE_BYTES=104857600
 ```
 
-To run as a headless background CLI directory daemon:
-```bash
-python -m app.main <path_to_local_sync_folder>
+### Mail & OTP Microservice (`mail_otp_server/.env`)
+```ini
+OTP_SERVICE_PORT=5001
+OTP_SERVICE_SECRET=your-shared-internal-otp-secret-here
+SMTP_SERVER=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USE_TLS=True
+SMTP_USER=your-email@gmail.com
+SMTP_PASSWORD=your-app-specific-password
 ```
 
----
-
-## Environment & Security Configuration
-
-> **IMPORTANT:** Never commit `.env`, `credentials.json`, or `token.json` files to Git. The project `.gitignore` excludes all environment and secret files by default.
-
-Configure secrets in `backend/.env` for local development, or in your hosting provider's environment variables dashboard for production:
-
-| Variable | Description | Example / Generation |
-|----------|-------------|----------------------|
-| `MONGO_URI` | MongoDB connection URI | `mongodb+srv://<user>:<pwd>@cluster.mongodb.net/cloud_storage_db` |
-| `SECRET_KEY` | Django cryptographic signing key | Strong random string |
-| `JWT_SIGNING_KEY` | Key for signing authentication JWTs | Strong random string |
-| `FILE_ENCRYPTION_KEK` | 32-byte Base64 Master Key Encryption Key | `python -c "import os,base64; print(base64.b64encode(os.urandom(32)).decode())"` |
-| `DEBUG` | Set to `False` in production | `True` (dev) / `False` (prod) |
-| `ALLOWED_HOSTS` | Comma-separated allowed hostnames | `localhost,127.0.0.1,api.yourdomain.com` |
-| `CORS_ALLOWED_ORIGINS` | Comma-separated allowed client origins | `http://localhost:5173,https://yourdomain.com` |
-| `STORAGE_ROOT` | Primary encrypted blob directory | `./file_storage` |
-| `SECONDARY_BACKUP_ROOT` | Secondary backup destination | `D:\VaultCloudBackup` (or network share / NAS) |
-
----
-
-## Running Automated Tests
-
-```bash
-# 1. Run Account Isolation & Watcher Lifecycle Tests (16 tests)
-python -m unittest app.test_account_isolation app.test_individual_sync -v
-
-# 2. Run Duplicate Filename Handling Tests (16 tests)
-python -m unittest app.test_duplicate_filename -v
-
-# 3. Run Backend API Tests
-cd backend && python manage.py test
-
-# 4. Verify Django System Health
-cd backend && python manage.py check
+### Frontend Dashboard (`frontend/.env`)
+```ini
+VITE_API_URL=http://localhost:8000/api
 ```
 
 ---
 
-## Production Deployment
+## Automated Verification
 
-### Backend (Render / Heroku / DigitalOcean / Railway)
-The backend includes a `Procfile` utilizing `gunicorn`:
-1. Connect repository to PAAS provider with root or `backend/` directory.
-2. Set all required environment variables in the provider dashboard.
-3. Build command: `pip install -r requirements.txt`.
-4. Start command: `gunicorn cloud_storage.wsgi --log-file -`.
+Run all test suites across the entire stack:
+```bash
+# Execute master test suite
+python tests/run_all_tests.py
 
-### Frontend (Vercel / Netlify)
-1. Connect repository with root directory set to `frontend/`.
-2. Build command: `npm run build`.
-3. Output directory: `dist`.
-4. Environment variable: `VITE_API_BASE_URL=https://api.yourdomain.com/api`.
+# Execute specific suite
+python tests/run_all_tests.py --suite security
+python tests/run_all_tests.py --suite desktop
+python tests/run_all_tests.py --suite frontend
+python tests/run_all_tests.py --suite otp
+```
 
-Detailed deployment notes and disaster recovery documentation can be found in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+---
+
+## Project Status & Limitations
+
+- **Upload Limit**: 100 MB per file version (enforced at frontend, streaming middleware, and crypto layers).
+- **Timezone**: Internally persisted in strict UTC; rendered in the web dashboard in `Asia/Kolkata` (IST, UTC+05:30).
+- **Physical Offsite Replication**: Local storage is active; multi-region cold-storage disaster recovery is scheduled for the production deployment phase.
 
 ---
 
 ## License
 
-This project was developed for educational and academic research purposes as part of the B.Tech Computer Science & Engineering degree program.
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.

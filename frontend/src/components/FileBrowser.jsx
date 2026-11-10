@@ -129,8 +129,16 @@ const FileBrowser = ({ searchQuery, viewMode, onRefreshStorage, onFolderChange }
   };
 
   const uploadFiles = async (filesToUpload) => {
+    const MAX_UPLOAD_SIZE_BYTES = Number(import.meta.env.VITE_MAX_UPLOAD_SIZE_BYTES) || 100 * 1024 * 1024;
+    const maxMb = Math.round(MAX_UPLOAD_SIZE_BYTES / (1024 * 1024));
+
     for (let i = 0; i < filesToUpload.length; i++) {
       const file = filesToUpload[i];
+      if (file.size > MAX_UPLOAD_SIZE_BYTES) {
+        alert(`File "${file.name}" exceeds the maximum allowed upload size of ${maxMb} MB (${(file.size / (1024 * 1024)).toFixed(1)} MB).`);
+        continue;
+      }
+
       const formData = new FormData();
       formData.append('file', file);
       if (currentFolderId && currentFolderId !== 'root') {

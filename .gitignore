@@ -43,6 +43,22 @@ synced_folder/
 VaultCloudBackup/
 **/VaultCloudBackup/
 
+# --- Documentation (Preserved Locally, Excluded from Public Git Repository) ---
+docs/
+/docs/
+PROJECT_TECHNICAL_ANALYSIS.md
+VAULTCLOUD_COMPLETE_PROJECT_AUDIT.md
+
+# --- Tests and Test Caches (Preserved Locally, Excluded from Public Git Repository) ---
+tests/
+/tests/
+test/
+/test/
+.pytest_cache/
+**/.pytest_cache/
+.coverage
+htmlcov/
+
 # --- Python & Virtual Environments ---
 __pycache__/
 **/__pycache__/
@@ -69,10 +85,6 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-.pytest_cache/
-**/.pytest_cache/
-.coverage
-htmlcov/
 *.log
 
 # --- Backup, Scratch & Temporary Files ---

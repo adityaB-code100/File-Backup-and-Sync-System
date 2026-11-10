@@ -16,7 +16,8 @@ from files.models import File, Folder, FileVersion
 from files.crypto_utils import (
     get_master_kek,
     compute_sha256_and_save_encrypted,
-    decrypt_file_stream
+    decrypt_file_stream,
+    UploadSizeLimitExceeded,
 )
 import mongoengine as me
 from files.lock_service import FileLockService
@@ -158,9 +159,17 @@ class FileListCreateView(APIView):
         temp_filename = f"temp_{uuid.uuid4().hex}"
         temp_dest = settings.STORAGE_ROOT / temp_filename
 
-        content_hash, size_bytes, wrapped_dek, dek_iv, file_iv = compute_sha256_and_save_encrypted(
-            temp_stream, temp_dest, kek_bytes
-        )
+        max_size = getattr(settings, 'MAX_UPLOAD_SIZE_BYTES', 100 * 1024 * 1024)
+        try:
+            content_hash, size_bytes, wrapped_dek, dek_iv, file_iv = compute_sha256_and_save_encrypted(
+                temp_stream, temp_dest, kek_bytes, max_size_bytes=max_size
+            )
+        except UploadSizeLimitExceeded as exc:
+            return Response({
+                "error": f"File size exceeds the maximum allowed upload size of {max_size // (1024*1024)} MB.",
+                "code": "FILE_TOO_LARGE",
+                "max_bytes": max_size,
+            }, status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
 
         # Storage quota check
         if user.storage_used_bytes + size_bytes > user.storage_quota_bytes:
@@ -396,9 +405,17 @@ class FileContentView(APIView):
 
         import uuid
         temp_dest = settings.STORAGE_ROOT / f"temp_{uuid.uuid4().hex}"
-        content_hash, size_bytes, wrapped_dek, dek_iv, file_iv = compute_sha256_and_save_encrypted(
-            stream, temp_dest, kek_bytes
-        )
+        max_size = getattr(settings, 'MAX_UPLOAD_SIZE_BYTES', 100 * 1024 * 1024)
+        try:
+            content_hash, size_bytes, wrapped_dek, dek_iv, file_iv = compute_sha256_and_save_encrypted(
+                stream, temp_dest, kek_bytes, max_size_bytes=max_size
+            )
+        except UploadSizeLimitExceeded as exc:
+            return Response({
+                "error": f"File size exceeds the maximum allowed upload size of {max_size // (1024*1024)} MB.",
+                "code": "FILE_TOO_LARGE",
+                "max_bytes": max_size,
+            }, status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
 
         if user.storage_used_bytes + size_bytes > user.storage_quota_bytes:
             if temp_dest.exists():

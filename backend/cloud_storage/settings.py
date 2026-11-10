@@ -121,6 +121,14 @@ STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
 # Secondary Encrypted Backup Root
 SECONDARY_BACKUP_ROOT = Path(os.getenv('SECONDARY_BACKUP_ROOT', r'D:\VaultCloudBackup')).resolve()
 
+# Upload size limit – configurable via environment variable (default: 100 MB)
+# Note: DATA_UPLOAD_MAX_MEMORY_SIZE alone is NOT a reliable uploaded-file-size limit.
+# Authoritative enforcement is performed inside crypto_utils.compute_sha256_and_save_encrypted
+# using UploadSizeLimitExceeded, which also cleans up temp files atomically.
+MAX_UPLOAD_SIZE_BYTES = int(os.getenv('MAX_UPLOAD_SIZE_BYTES', str(100 * 1024 * 1024)))
+DATA_UPLOAD_MAX_MEMORY_SIZE = MAX_UPLOAD_SIZE_BYTES   # Django pre-read guard (supplementary)
+FILE_UPLOAD_MAX_MEMORY_SIZE = MAX_UPLOAD_SIZE_BYTES
+
 # REST Framework Configuration
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (

@@ -1,5 +1,6 @@
 import sys
 import os
+from pathlib import Path
 
 # Set working directory to mail_otp_server
 server_dir = os.path.dirname(os.path.abspath(__file__))
@@ -15,9 +16,13 @@ for mod in list(sys.modules.keys()):
 import pytest
 
 if __name__ == "__main__":
+    target_tests = Path("../tests/otp_service").resolve()
+    if not target_tests.exists():
+        target_tests = Path("tests").resolve()
+
     # Disable interfering global plugins
     args = [
-        "tests",
+        str(target_tests),
         "-v",
         "-p", "no:django",
         "-p", "no:dash",
@@ -25,4 +30,3 @@ if __name__ == "__main__":
     ]
     exit_code = pytest.main(args)
     sys.exit(exit_code)
-
